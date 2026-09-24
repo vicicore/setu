@@ -1,5 +1,51 @@
 ONEGOV / PROJECT SETU --- SIH BUILD README
 
+## Repository layout
+
+```
+setu/
+  frontend/   Next.js + TypeScript + Tailwind (citizen + admin UI)
+  backend/    FastAPI + Pydantic (API gateway, orchestration, connectors)
+  infra/n8n/  n8n docker-compose + exported workflow JSON
+  docs/       DECISIONS.md (implementation decisions log) + specs
+```
+
+## Local development (clean-machine quickstart)
+
+Backend:
+
+```bash
+cd backend
+py -m venv venv
+./venv/Scripts/pip install -r requirements.txt
+cp .env.example .env   # fill in Supabase/Appwrite/n8n values
+./venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+n8n (optional locally, required for the SLA/webhook workflows):
+
+```bash
+cd infra/n8n
+docker compose up -d
+```
+
+Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
+
+Status: Phase 1 (Foundation) scaffolding is in place — Next.js shell builds,
+FastAPI shell runs with a verified `/api/v1/health` endpoint and a passing
+test. Supabase/Appwrite/n8n are wired for configuration but not yet
+connected to live projects. See `docs/DECISIONS.md` for choices made where
+the spec left implementation detail open.
+
 1. What we are building
 
 Problem: SIH260129 --- system integration and interoperability among
