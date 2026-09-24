@@ -40,11 +40,25 @@ docker compose up -d
 
 Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
 
-Status: Phase 1 (Foundation) scaffolding is in place — Next.js shell builds,
-FastAPI shell runs with a verified `/api/v1/health` endpoint and a passing
-test. Supabase/Appwrite/n8n are wired for configuration but not yet
-connected to live projects. See `docs/DECISIONS.md` for choices made where
-the spec left implementation detail open.
+Status: Phase 1 (Foundation) is done — Next.js shell builds, FastAPI shell
+runs with a verified `/api/v1/health` endpoint. Phase 2 (orchestration core)
+has real, tested logic: a `JourneyOrchestrator` state machine, 4 mock
+department connectors (Revenue/Education/Social Justice/Labour) behind a
+common interface, the full Supabase schema + RLS (`backend/app/db/migrations/`,
+verified against a real Postgres container), and a working in-memory `/demo`
+API that reproduces the signature College Admission + Scholarship journey
+end to end — consent gating, connector submission, webhook approval, and
+the automatic scholarship unlock — with 6 passing backend tests. Supabase/
+Appwrite/n8n are wired for configuration but not yet connected to live
+projects (needs project owner to create those accounts). See
+`docs/DECISIONS.md` for choices made where the spec left implementation
+detail open, including one bug the tests caught and fixed.
+
+Try it locally: `cd backend && ./venv/Scripts/python -m uvicorn app.main:app --reload`
+then `POST /api/v1/demo/reset`, `POST /api/v1/demo/consent/income-certificate`,
+`POST /api/v1/demo/actions/submit-income-certificate`,
+`POST /api/v1/demo/actions/approve-income-certificate`, `GET /api/v1/demo/journey`
+— watch `education_scholarship` go from `blocked` to `ready`.
 
 1. What we are building
 
