@@ -65,8 +65,10 @@ class DocumentRecord(BaseModel):
     original_filename: str
     mime_type: str
     size_bytes: int
-    status: DocumentStatus = DocumentStatus.PENDING
+    status: DocumentStatus = DocumentStatus.UPLOADED
+    rejection_reason: str | None = None
     created_at: datetime
+    updated_at: datetime
 
 
 class AuditLogEntry(BaseModel):

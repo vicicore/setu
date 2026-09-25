@@ -6,39 +6,67 @@ import {
   DemoAuditEntryView,
   DemoCatalogView,
   DemoJourneyView,
+  DocumentView,
+  EligibilityEvaluateResult,
+  citizenApi,
   demoApi,
 } from "@/lib/api";
-import { SLA_CLASSES, SLA_LABEL, STATUS_CLASSES, STATUS_LABEL } from "./statusStyles";
+import {
+  DOC_STATUS_CLASSES,
+  DOC_STATUS_LABEL,
+  SLA_CLASSES,
+  SLA_LABEL,
+  STATUS_CLASSES,
+  STATUS_LABEL,
+} from "./statusStyles";
 
-type ActionName = "reset" | "consent" | "submit" | "approve" | null;
+type ActionName =
+  | "reset"
+  | "consent"
+  | "submit"
+  | "approve"
+  | "casteReview"
+  | "casteVerify"
+  | null;
 
 export default function DemoPage() {
   const [catalog, setCatalog] = useState<DemoCatalogView | null>(null);
   const [journey, setJourney] = useState<DemoJourneyView | null>(null);
+  const [documents, setDocuments] = useState<DocumentView[]>([]);
+  const [eligibility, setEligibility] = useState<EligibilityEvaluateResult | null>(null);
   const [auditLog, setAuditLog] = useState<DemoAuditEntryView[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<ActionName>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshAuditLog = useCallback(async () => {
-    setAuditLog(await demoApi.getAuditLog());
+  const refreshAll = useCallback(async (citizenId: string, lifeEventCode: string) => {
+    // getJourney() lazily seeds the vault on first load (see
+    // _reset_vault_and_journey on the backend) — it must resolve before
+    // the vault-dependent calls below fire, or they can race ahead and
+    // read an empty vault. Not safe to Promise.all with the others.
+    const journeyView = await demoApi.getJourney();
+    const [docs, elig, audit] = await Promise.all([
+      citizenApi.getDocuments(citizenId),
+      citizenApi.getEligibility(citizenId, lifeEventCode),
+      demoApi.getAuditLog(),
+    ]);
+    setJourney(journeyView);
+    setDocuments(docs);
+    setEligibility(elig);
+    setAuditLog(audit);
   }, []);
 
   const loadAll = useCallback(async () => {
     try {
-      const [catalogView, journeyView] = await Promise.all([
-        demoApi.getCatalog(),
-        demoApi.getJourney(),
-      ]);
+      const catalogView = await demoApi.getCatalog();
       setCatalog(catalogView);
-      setJourney(journeyView);
-      await refreshAuditLog();
+      await refreshAll(catalogView.citizen_id, catalogView.life_event_code);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the SETU backend API.");
     } finally {
       setLoading(false);
     }
-  }, [refreshAuditLog]);
+  }, [refreshAll]);
 
   useEffect(() => {
     // Fetching from the FastAPI backend on mount is the documented
@@ -50,12 +78,12 @@ export default function DemoPage() {
   }, [loadAll]);
 
   const runAction = async (name: ActionName, fn: () => Promise<DemoJourneyView>) => {
+    if (!catalog) return;
     setPendingAction(name);
     setError(null);
     try {
-      const updated = await fn();
-      setJourney(updated);
-      await refreshAuditLog();
+      await fn();
+      await refreshAll(catalog.citizen_id, catalog.life_event_code);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Action failed unexpectedly.");
     } finally {
@@ -66,12 +94,18 @@ export default function DemoPage() {
   const stepByCode = (code: string) => journey?.steps.find((s) => s.service_code === code);
   const income = stepByCode("income_certificate");
   const scholarship = stepByCode("education_scholarship");
+  const casteDoc = documents.find((d) => d.doc_type === "caste_certificate");
 
   const canGrantConsent = income?.status === "not_started";
   const hasActiveConsent =
-    journey !== null && (income?.status === "in_progress" || income?.status === "verified" || auditLog.some((e) => e.action === "consent.granted"));
+    journey !== null &&
+    (income?.status === "in_progress" ||
+      income?.status === "verified" ||
+      auditLog.some((e) => e.action === "consent.granted"));
   const canSubmit = income?.status === "not_started" && hasActiveConsent;
   const canApprove = income?.status === "in_progress";
+  const canSubmitCasteForReview = casteDoc?.status === "uploaded";
+  const canVerifyCaste = casteDoc?.status === "under_review";
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-10 sm:px-6">
@@ -114,50 +148,42 @@ export default function DemoPage() {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                2. Required government services &amp; dependency graph
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                2. Citizen profile &amp; document vault
               </h2>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {journey.steps.map((step) => (
-                  <div
-                    key={step.service_code}
-                    className="rounded-lg border border-slate-200 p-4"
-                  >
+              <p className="mb-4 text-xs text-slate-500">
+                Real vault documents for citizen <span className="font-mono">{catalog.citizen_id}</span> — a
+                document being uploaded is not the same as it being verified.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {documents.map((doc) => (
+                  <div key={doc.id} className="rounded-lg border border-slate-200 p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="font-medium text-slate-900">{step.display_name}</p>
-                        <p className="text-xs text-slate-500">{step.department}</p>
+                        <p className="font-medium text-slate-900">{doc.doc_type.replaceAll("_", " ")}</p>
+                        <p className="text-xs text-slate-500">{doc.original_filename}</p>
                       </div>
                       <span
-                        className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[step.status]}`}
+                        className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${DOC_STATUS_CLASSES[doc.status]}`}
                       >
-                        {STATUS_LABEL[step.status]}
+                        {DOC_STATUS_LABEL[doc.status]}
                       </span>
                     </div>
-                    {step.blocked_reason && (
-                      <p className="mt-2 text-xs text-amber-700">⏸ {step.blocked_reason}</p>
-                    )}
-                    {step.external_reference && (
-                      <p className="mt-2 text-xs text-slate-500">Ref: {step.external_reference}</p>
-                    )}
-                    {step.sla_status && (
-                      <p className={`mt-1 text-xs font-medium ${SLA_CLASSES[step.sla_status]}`}>
-                        {SLA_LABEL[step.sla_status]}
-                      </p>
-                    )}
-                    {catalog.services.find((s) => s.service_code === step.service_code)
-                      ?.depends_on_service_code && (
-                      <p className="mt-2 text-xs text-slate-400">
-                        ↳ depends on{" "}
-                        {
-                          journey.steps.find(
-                            (s) =>
-                              s.service_code ===
-                              catalog.services.find((c) => c.service_code === step.service_code)
-                                ?.depends_on_service_code,
-                          )?.display_name
-                        }
-                      </p>
+                    {doc.doc_type === "caste_certificate" && (
+                      <div className="mt-3 flex gap-2">
+                        <DemoButton
+                          label="Submit for review"
+                          disabled={!canSubmitCasteForReview}
+                          pending={pendingAction === "casteReview"}
+                          onClick={() => runAction("casteReview", demoApi.submitCasteCertificateForReview)}
+                        />
+                        <DemoButton
+                          label="Verify"
+                          disabled={!canVerifyCaste}
+                          pending={pendingAction === "casteVerify"}
+                          onClick={() => runAction("casteVerify", demoApi.verifyCasteCertificate)}
+                        />
+                      </div>
                     )}
                   </div>
                 ))}
@@ -165,8 +191,82 @@ export default function DemoPage() {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                3. Eligibility (computed from the vault above, not typed in)
+              </h2>
+              <p className="mb-4 text-xs text-slate-500">
+                Deterministic rules over the same requirement graph the orchestrator uses — no AI in
+                this decision.
+              </p>
+              <div className="space-y-2">
+                {eligibility?.services.map((s) => (
+                  <div key={s.service_code} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-slate-700">{s.display_name}</span>
+                    <span className="text-right text-xs text-slate-500">{s.reasons[0]}</span>
+                    <span
+                      className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[s.status]}`}
+                    >
+                      {STATUS_LABEL[s.status]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                3. Consent &amp; orchestration controls
+                4. Required government services &amp; dependency graph
+              </h2>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {journey.steps.map((step) => {
+                  const requires =
+                    catalog.services.find((s) => s.service_code === step.service_code)
+                      ?.requires_service_codes ?? [];
+                  return (
+                    <div key={step.service_code} className="rounded-lg border border-slate-200 p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-slate-900">{step.display_name}</p>
+                          <p className="text-xs text-slate-500">{step.department}</p>
+                        </div>
+                        <span
+                          className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[step.status]}`}
+                        >
+                          {STATUS_LABEL[step.status]}
+                        </span>
+                      </div>
+                      {step.blocked_reason && (
+                        <p className="mt-2 text-xs text-amber-700">⏸ {step.blocked_reason}</p>
+                      )}
+                      {step.external_reference && (
+                        <p className="mt-2 text-xs text-slate-500">Ref: {step.external_reference}</p>
+                      )}
+                      {step.sla_status && (
+                        <p className={`mt-1 text-xs font-medium ${SLA_CLASSES[step.sla_status]}`}>
+                          {SLA_LABEL[step.sla_status]}
+                        </p>
+                      )}
+                      {requires.length > 0 && (
+                        <p className="mt-2 text-xs text-slate-400">
+                          ↳ requires{" "}
+                          {requires
+                            .map(
+                              (code) =>
+                                journey.steps.find((s) => s.service_code === code)?.display_name ??
+                                code,
+                            )
+                            .join(", ")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                5. Consent &amp; orchestration controls
               </h2>
               <div className="flex flex-wrap gap-3">
                 <DemoButton
@@ -200,11 +300,17 @@ export default function DemoPage() {
                   hunting, no re-uploaded documents, no separate status tracking.
                 </p>
               )}
+              {journey.is_complete && (
+                <p className="mt-2 rounded-lg bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+                  ✓ Every required service for this journey — via the Revenue connector and via the
+                  vault — is now verified.
+                </p>
+              )}
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                4. Unified journey timeline
+                6. Unified journey timeline
               </h2>
               <ol className="space-y-2 text-sm">
                 {journey.timeline.map((event, i) => (
@@ -218,7 +324,7 @@ export default function DemoPage() {
 
             <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                5. Audit trail
+                7. Audit trail
               </h2>
               {auditLog.length === 0 ? (
                 <p className="text-sm text-slate-500">No audit events yet.</p>

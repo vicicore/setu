@@ -23,7 +23,9 @@ def test_demo_catalog_describes_the_signature_journey() -> None:
         "education_scholarship",
     }
     scholarship = next(s for s in body["services"] if s["service_code"] == "education_scholarship")
-    assert scholarship["depends_on_service_code"] == "income_certificate"
+    assert set(scholarship["requires_service_codes"]) == {
+        "identity_verification", "domicile_certificate", "income_certificate",
+    }
 
 
 def test_demo_reset_returns_seeded_blocked_scholarship() -> None:
@@ -66,7 +68,11 @@ def test_demo_full_flow_unlocks_scholarship_via_http_and_persists() -> None:
     steps = {s["service_code"]: s for s in approved.json()["steps"]}
     assert steps["income_certificate"]["status"] == "verified"
     assert steps["education_scholarship"]["status"] == "ready"
-    assert approved.json()["is_complete"] is True
+    # caste_certificate is seeded UPLOADED-but-unreviewed (see
+    # test_vault_verification_cascades_into_journey) — the required
+    # income/scholarship path does not depend on it, so the journey is
+    # not "complete" yet even though the scholarship itself is ready.
+    assert approved.json()["is_complete"] is False
 
     # Every transition must have left an audit trail entry.
     audit_log = client.get("/api/v1/demo/audit-log").json()
@@ -79,6 +85,51 @@ def test_demo_full_flow_unlocks_scholarship_via_http_and_persists() -> None:
     ]
     cascade_entry = next(e for e in audit_log if e["action"] == "connector.event_received")
     assert "education_scholarship" in cascade_entry["metadata"]["cascaded_to"]
+
+
+def test_vault_verification_cascades_into_journey_via_shared_event_path() -> None:
+    """The integration this whole phase is about: verifying a vault
+    document reaches the journey through the same
+    JourneyService.receive_connector_event the Revenue webhook uses —
+    not a second, parallel state machine — and the journey becomes
+    fully complete once every step (income via connector, caste via
+    vault) is resolved."""
+    reset_body = client.post("/api/v1/demo/reset").json()
+    steps = {s["service_code"]: s for s in reset_body["steps"]}
+    assert steps["caste_certificate"]["status"] == "not_started"
+
+    review = client.post("/api/v1/demo/actions/submit-caste-certificate-for-review")
+    assert review.status_code == 200
+    # Submitting a document for review is a vault-level transition; it
+    # does not by itself change the journey step (still not verified).
+    steps = {s["service_code"]: s for s in review.json()["steps"]}
+    assert steps["caste_certificate"]["status"] == "not_started"
+
+    verified = client.post("/api/v1/demo/actions/verify-caste-certificate")
+    assert verified.status_code == 200
+    steps = {s["service_code"]: s for s in verified.json()["steps"]}
+    assert steps["caste_certificate"]["status"] == "verified"
+
+    audit_log = client.get("/api/v1/demo/audit-log").json()
+    cascade_entry = next(
+        e for e in audit_log
+        if e["action"] == "connector.event_received"
+        and e["metadata"]["service_code"] == "caste_certificate"
+    )
+    assert cascade_entry["metadata"]["source"] == "vault_verification"
+
+    # Now finish the income path too, so every step resolves and the
+    # journey reports fully complete.
+    client.post("/api/v1/demo/consent/income-certificate")
+    client.post("/api/v1/demo/actions/submit-income-certificate")
+    final = client.post("/api/v1/demo/actions/approve-income-certificate")
+    assert final.json()["is_complete"] is True
+
+
+def test_verifying_caste_certificate_before_review_is_rejected() -> None:
+    client.post("/api/v1/demo/reset")
+    response = client.post("/api/v1/demo/actions/verify-caste-certificate")
+    assert response.status_code == 409
 
 
 def test_sla_alerts_empty_on_a_freshly_reset_journey() -> None:

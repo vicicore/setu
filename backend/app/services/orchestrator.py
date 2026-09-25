@@ -136,10 +136,14 @@ class JourneyOrchestrator:
             raise OrchestrationError(
                 f"{service_code} is not in a submittable state (currently {step.status})"
             )
-        dependency = journey.graph.dependency_of(service_code)
-        if dependency and journey.step(dependency).status != ApplicationStepStatus.VERIFIED:
+        unmet = [
+            req
+            for req in journey.graph.requirements_of(service_code)
+            if journey.step(req).status != ApplicationStepStatus.VERIFIED
+        ]
+        if unmet:
             raise DependencyNotMetError(
-                f"{service_code} cannot be submitted before {dependency} is verified"
+                f"{service_code} cannot be submitted before {', '.join(unmet)} {'is' if len(unmet) == 1 else 'are'} verified"
             )
         consent = journey.consents.get(service_code)
         if not consent or not consent.is_active:
@@ -188,26 +192,27 @@ class JourneyOrchestrator:
             step = journey.steps[service_code]
             if step.status in (ApplicationStepStatus.VERIFIED, ApplicationStepStatus.IN_PROGRESS):
                 continue
-            dependency = journey.graph.dependency_of(service_code)
-            if dependency is None:
+            requirements = journey.graph.requirements_of(service_code)
+            if not requirements:
                 continue
-            dep_status = journey.steps[dependency].status
+            rejected = [r for r in requirements if journey.steps[r].status == ApplicationStepStatus.REJECTED]
+            unmet = [r for r in requirements if journey.steps[r].status != ApplicationStepStatus.VERIFIED]
             before = step.status
-            if dep_status == ApplicationStepStatus.VERIFIED:
+            if rejected:
+                step.status = ApplicationStepStatus.BLOCKED
+                names = ", ".join(journey.graph.display_name_of(r) for r in rejected)
+                step.blocked_reason = f"{names} was rejected"
+            elif not unmet:
                 step.status = ApplicationStepStatus.READY
                 step.blocked_reason = None
-            elif dep_status == ApplicationStepStatus.REJECTED:
-                step.status = ApplicationStepStatus.BLOCKED
-                step.blocked_reason = f"{dependency} was rejected"
             else:
                 step.status = ApplicationStepStatus.BLOCKED
-                step.blocked_reason = (
-                    f"Waiting for {journey.graph.display_name_of(dependency)}"
-                )
+                names = ", ".join(journey.graph.display_name_of(r) for r in unmet)
+                step.blocked_reason = f"Waiting for {names}"
             if step.status != before:
                 step.updated_at = datetime.now(timezone.utc)
                 journey.timeline.append(
-                    f"{service_code} -> {step.status.value} ({step.blocked_reason or 'dependency satisfied'})"
+                    f"{service_code} -> {step.status.value} ({step.blocked_reason or 'all requirements satisfied'})"
                 )
                 changed.append(service_code)
         return changed

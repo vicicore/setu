@@ -1,7 +1,12 @@
 from fastapi import APIRouter, HTTPException
 
 from app.core.config import get_settings
-from app.core.container import get_journey_service, get_revenue_connector
+from app.core.container import (
+    get_document_repository,
+    get_document_vault_service,
+    get_journey_service,
+    get_revenue_connector,
+)
 from app.schemas.demo import (
     DemoAuditEntryView,
     DemoCatalogService,
@@ -9,9 +14,11 @@ from app.schemas.demo import (
     DemoJourneyView,
     DemoStepView,
 )
-from app.services import demo_scenario
+from app.services import demo_scenario, vault_eligibility
+from app.services.document_service import DocumentNotFoundError, InvalidDocumentTransitionError
 from app.services.orchestrator import Journey, OrchestrationError
 from app.services.sla import compute_sla_status
+from app.services.vault_integration import verify_document_and_sync_journeys
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -46,10 +53,40 @@ def _journey_view(journey: Journey) -> DemoJourneyView:
     )
 
 
+def _reset_vault_and_journey() -> Journey:
+    """The one place that seeds the vault and starts/resets the journey
+    from it — used by both POST /demo/reset and the auto-start fallback
+    in GET /demo/journey, so there is exactly one seeding path."""
+    vault = get_document_vault_service()
+    demo_scenario.reset_demo_vault(vault)
+    verified = vault_eligibility.verified_service_codes_from_vault(
+        demo_scenario.DEMO_CITIZEN_ID, get_document_repository()
+    )
+    return get_journey_service().start_or_reset_journey(
+        application_id=demo_scenario.DEMO_APPLICATION_ID,
+        citizen_id=demo_scenario.DEMO_CITIZEN_ID,
+        life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
+        graph=demo_scenario.DEMO_GRAPH,
+        already_verified_service_codes=verified,
+    )
+
+
+def _find_pending_caste_document_id() -> str:
+    documents = get_document_repository().list_for_citizen(demo_scenario.DEMO_CITIZEN_ID)
+    for doc in documents:
+        if doc.doc_type == demo_scenario.SEED_PENDING_DOC_TYPE:
+            return doc.id
+    raise HTTPException(
+        status_code=404,
+        detail="No caste certificate document found — reset the demo first",
+    )
+
+
 @router.get("/catalog", response_model=DemoCatalogView)
 def get_catalog() -> DemoCatalogView:
     _require_demo_mode()
     return DemoCatalogView(
+        citizen_id=demo_scenario.DEMO_CITIZEN_ID,
         life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
         citizen_goal_statement_en=demo_scenario.CITIZEN_GOAL_STATEMENT_EN,
         citizen_goal_statement_mr=demo_scenario.CITIZEN_GOAL_STATEMENT_MR,
@@ -58,7 +95,7 @@ def get_catalog() -> DemoCatalogView:
                 service_code=s.service_code,
                 display_name=s.display_name,
                 department=s.department,
-                depends_on_service_code=s.depends_on_service_code,
+                requires_service_codes=s.requires_service_codes,
             )
             for s in demo_scenario.catalog()
         ],
@@ -68,30 +105,16 @@ def get_catalog() -> DemoCatalogView:
 @router.get("/journey", response_model=DemoJourneyView)
 def get_journey() -> DemoJourneyView:
     _require_demo_mode()
-    service = get_journey_service()
-    journey = service.get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    journey = get_journey_service().get_journey(demo_scenario.DEMO_APPLICATION_ID)
     if journey is None:
-        journey = service.start_or_reset_journey(
-            application_id=demo_scenario.DEMO_APPLICATION_ID,
-            citizen_id=demo_scenario.DEMO_CITIZEN_ID,
-            life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
-            graph=demo_scenario.DEMO_GRAPH,
-            already_verified_service_codes=set(demo_scenario.ALREADY_VERIFIED_ON_RESET),
-        )
+        journey = _reset_vault_and_journey()
     return _journey_view(journey)
 
 
 @router.post("/reset", response_model=DemoJourneyView)
 def reset_demo() -> DemoJourneyView:
     _require_demo_mode()
-    journey = get_journey_service().start_or_reset_journey(
-        application_id=demo_scenario.DEMO_APPLICATION_ID,
-        citizen_id=demo_scenario.DEMO_CITIZEN_ID,
-        life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
-        graph=demo_scenario.DEMO_GRAPH,
-        already_verified_service_codes=set(demo_scenario.ALREADY_VERIFIED_ON_RESET),
-    )
-    return _journey_view(journey)
+    return _journey_view(_reset_vault_and_journey())
 
 
 @router.post("/consent/income-certificate", response_model=DemoJourneyView)
@@ -144,6 +167,42 @@ def approve_income_certificate() -> DemoJourneyView:
         )
     except OrchestrationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _journey_view(journey)
+
+
+@router.post("/actions/submit-caste-certificate-for-review", response_model=DemoJourneyView)
+def submit_caste_certificate_for_review() -> DemoJourneyView:
+    """Demonstrates the document lifecycle's first real transition
+    (UPLOADED -> UNDER_REVIEW) on a document that is genuinely sitting
+    in the vault unreviewed — separate from, and without touching, the
+    connector-based income certificate flow."""
+    _require_demo_mode()
+    document_id = _find_pending_caste_document_id()
+    try:
+        get_document_vault_service().submit_for_review(document_id)
+    except (DocumentNotFoundError, InvalidDocumentTransitionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    journey = get_journey_service().get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    assert journey is not None
+    return _journey_view(journey)
+
+
+@router.post("/actions/verify-caste-certificate", response_model=DemoJourneyView)
+def verify_caste_certificate() -> DemoJourneyView:
+    """The vault -> journey cascade, live: verifying this document calls
+    the exact same JourneyService.receive_connector_event the Revenue
+    webhook uses (via sync_verified_document) — a second, independent
+    channel into the one orchestration state machine, not a parallel one."""
+    _require_demo_mode()
+    document_id = _find_pending_caste_document_id()
+    vault = get_document_vault_service()
+    journeys = get_journey_service()
+    try:
+        verify_document_and_sync_journeys(document_id, vault, journeys)
+    except (DocumentNotFoundError, InvalidDocumentTransitionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    journey = journeys.get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    assert journey is not None
     return _journey_view(journey)
 
 

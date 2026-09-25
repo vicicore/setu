@@ -69,6 +69,9 @@ class DocumentRepository(ABC):
     def create(self, record: DocumentRecord) -> DocumentRecord: ...
 
     @abstractmethod
+    def save(self, record: DocumentRecord) -> DocumentRecord: ...
+
+    @abstractmethod
     def get(self, document_id: str) -> DocumentRecord | None: ...
 
     @abstractmethod

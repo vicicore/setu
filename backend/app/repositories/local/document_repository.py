@@ -20,6 +20,9 @@ class LocalJsonDocumentRepository(DocumentRepository):
         self._store.mutate(_mutate)
         return record
 
+    def save(self, record: DocumentRecord) -> DocumentRecord:
+        return self.create(record)
+
     def get(self, document_id: str) -> DocumentRecord | None:
         data = self._store.read() or {}
         raw = data.get(document_id)

@@ -8,16 +8,19 @@ export type ApplicationStepStatus =
   | "ready"
   | "rejected";
 
+export type DocumentStatus = "uploaded" | "under_review" | "verified" | "rejected" | "expired";
+
 export type SlaStatus = "on_track" | "at_risk" | "breached";
 
 export interface DemoCatalogService {
   service_code: string;
   display_name: string;
   department: string;
-  depends_on_service_code: string | null;
+  requires_service_codes: string[];
 }
 
 export interface DemoCatalogView {
+  citizen_id: string;
   life_event_code: string;
   citizen_goal_statement_en: string;
   citizen_goal_statement_mr: string;
@@ -52,6 +55,36 @@ export interface DemoAuditEntryView {
   created_at: string;
 }
 
+export interface DocumentView {
+  id: string;
+  citizen_id: string;
+  doc_type: string;
+  issuer: string | null;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  status: DocumentStatus;
+  rejection_reason: string | null;
+  url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceEligibility {
+  service_code: string;
+  display_name: string;
+  department: string;
+  status: ApplicationStepStatus;
+  requires_service_codes: string[];
+  reasons: string[];
+}
+
+export interface EligibilityEvaluateResult {
+  life_event_code: string;
+  services: ServiceEligibility[];
+  overall_ready: boolean;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -83,5 +116,16 @@ export const demoApi = {
     request<DemoJourneyView>("/demo/actions/submit-income-certificate", { method: "POST" }),
   approveIncomeCertificate: () =>
     request<DemoJourneyView>("/demo/actions/approve-income-certificate", { method: "POST" }),
+  submitCasteCertificateForReview: () =>
+    request<DemoJourneyView>("/demo/actions/submit-caste-certificate-for-review", { method: "POST" }),
+  verifyCasteCertificate: () =>
+    request<DemoJourneyView>("/demo/actions/verify-caste-certificate", { method: "POST" }),
   getAuditLog: () => request<DemoAuditEntryView[]>("/demo/audit-log"),
+};
+
+export const citizenApi = {
+  getDocuments: (citizenId: string) =>
+    request<DocumentView[]>(`/citizens/${citizenId}/documents`),
+  getEligibility: (citizenId: string, lifeEventCode: string) =>
+    request<EligibilityEvaluateResult>(`/citizens/${citizenId}/eligibility/${lifeEventCode}`),
 };

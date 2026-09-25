@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from app.repositories.interfaces import ApplicationRepository, AuditLogRepository
 from app.repositories.models import ApplicationRecord, AuditLogEntry
+from app.schemas.enums import ApplicationStepStatus
 from app.services.connectors.base import GovernmentConnector
 from app.services.dependency_graph import DependencyGraph
 from app.services.journey_mapper import to_domain, to_record
@@ -143,6 +144,29 @@ class JourneyService:
         return self.receive_connector_event(
             record.id, service_code, event_status, source=f"n8n_webhook:{source_event}"
         )
+
+    def sync_verified_document(self, citizen_id: str, service_code: str) -> list[Journey]:
+        """Called when a vault document transitions to VERIFIED (see
+        app/services/vault_integration.py). Finds every one of this
+        citizen's applications with a step for `service_code` still
+        sitting in NOT_STARTED or BLOCKED — i.e. not already being
+        driven by a connector — and pushes it through the exact same
+        receive_connector_event path a webhook uses. This is the whole
+        point: document verification is just another kind of "approved"
+        event into the one orchestration state machine, not a second one."""
+        updated_journeys = []
+        for record in self._applications.list_for_citizen(citizen_id):
+            step = record.steps.get(service_code)
+            if step is None:
+                continue
+            if step.status not in (ApplicationStepStatus.NOT_STARTED, ApplicationStepStatus.BLOCKED):
+                continue
+            updated_journeys.append(
+                self.receive_connector_event(
+                    record.id, service_code, event_status="approved", source="vault_verification"
+                )
+            )
+        return updated_journeys
 
     def audit_trail(self, application_id: str) -> list[AuditLogEntry]:
         return self._audit.list_for_application(application_id)

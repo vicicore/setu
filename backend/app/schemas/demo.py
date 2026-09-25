@@ -9,10 +9,11 @@ class DemoCatalogService(BaseModel):
     service_code: str
     display_name: str
     department: str
-    depends_on_service_code: str | None
+    requires_service_codes: list[str]
 
 
 class DemoCatalogView(BaseModel):
+    citizen_id: str
     life_event_code: str
     citizen_goal_statement_en: str
     citizen_goal_statement_mr: str

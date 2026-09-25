@@ -14,5 +14,11 @@ class DocumentView(BaseModel):
     mime_type: str
     size_bytes: int
     status: DocumentStatus
+    rejection_reason: str | None
     url: str
     created_at: datetime
+    updated_at: datetime
+
+
+class DocumentRejectRequest(BaseModel):
+    reason: str

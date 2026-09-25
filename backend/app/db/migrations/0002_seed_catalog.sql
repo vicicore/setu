@@ -28,12 +28,14 @@ insert into life_events (code, title_en, title_mr, title_hi, description) values
    'Register for skill development and employment exchange services.')
 on conflict (code) do nothing;
 
--- College Admission + Scholarship dependency graph:
+-- College Admission + Scholarship requirement graph:
 --   identity_verification, domicile_certificate, caste_certificate,
 --   income_certificate -> independent documents (each verified/missing
 --   on its own; no cross-gating between them)
---   education_scholarship -> the only gated step, blocked until
---   income_certificate is verified
+--   education_scholarship -> requires identity_verification,
+--   domicile_certificate AND income_certificate all verified (caste is
+--   tracked but not a scholarship prerequisite) — one row per
+--   requirement, matching the many-to-many shape this table already had.
 insert into service_dependencies (life_event_id, service_id, depends_on_service_id, sequence_order)
 select le.id, s.id, dep.id, seq
 from (values
@@ -41,7 +43,9 @@ from (values
   ('college_admission_scholarship', 'domicile_certificate', null, 2),
   ('college_admission_scholarship', 'caste_certificate', null, 3),
   ('college_admission_scholarship', 'income_certificate', null, 4),
-  ('college_admission_scholarship', 'education_scholarship', 'income_certificate', 5)
+  ('college_admission_scholarship', 'education_scholarship', 'identity_verification', 5),
+  ('college_admission_scholarship', 'education_scholarship', 'domicile_certificate', 6),
+  ('college_admission_scholarship', 'education_scholarship', 'income_certificate', 7)
 ) as v(event_code, service_code, dep_code, seq)
 join life_events le on le.code = v.event_code
 join services s on s.code = v.service_code

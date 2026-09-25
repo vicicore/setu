@@ -3,24 +3,12 @@ from pydantic import BaseModel
 from app.schemas.enums import ApplicationStepStatus
 
 
-class EligibilityEvaluateRequest(BaseModel):
-    """Deliberately takes life_event_code + an explicit list of already-
-    verified service codes, rather than a citizen_id looked up against a
-    live Supabase profile — there is no persisted citizen/document vault
-    wired to eligibility yet (that's later work; see docs/DECISIONS.md).
-    This keeps the rule engine itself real and testable without faking a
-    profile store underneath it."""
-
-    life_event_code: str
-    verified_service_codes: list[str] = []
-
-
 class ServiceEligibility(BaseModel):
     service_code: str
     display_name: str
     department: str
     status: ApplicationStepStatus
-    depends_on_service_code: str | None
+    requires_service_codes: list[str]
     reasons: list[str] = []
 
 
@@ -28,3 +16,16 @@ class EligibilityEvaluateResult(BaseModel):
     life_event_code: str
     services: list[ServiceEligibility]
     overall_ready: bool
+
+
+class EligibilityEvaluateRequest(BaseModel):
+    """Used only by the low-level /eligibility/evaluate-raw endpoint for
+    testing the rule engine against an arbitrary hypothetical state. The
+    normal citizen-facing flow is GET /citizens/{citizen_id}/eligibility/
+    {life_event_code}, which computes verified_service_codes from the
+    citizen's actual verified vault documents — see
+    app/services/vault_eligibility.py. Do not wire this request shape
+    into any citizen-facing UI."""
+
+    life_event_code: str
+    verified_service_codes: list[str] = []

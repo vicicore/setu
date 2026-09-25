@@ -48,7 +48,7 @@ def test_document_upload_list_and_get() -> None:
     assert upload.status_code == 201
     body = upload.json()
     assert body["doc_type"] == "income_certificate"
-    assert body["status"] == "pending"
+    assert body["status"] == "uploaded"
     assert body["url"].startswith("/media/documents/")
 
     listing = client.get("/api/v1/citizens/citizen-test-2/documents")

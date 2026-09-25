@@ -2,10 +2,15 @@ from enum import StrEnum
 
 
 class DocumentStatus(StrEnum):
+    """A document's real verification lifecycle. Uploading a file is not
+    the same as it being verified — only VERIFIED documents count toward
+    eligibility (see app/services/vault_eligibility.py)."""
+
+    UPLOADED = "uploaded"
+    UNDER_REVIEW = "under_review"
     VERIFIED = "verified"
-    PENDING = "pending"
+    REJECTED = "rejected"
     EXPIRED = "expired"
-    ACTION_NEEDED = "action_needed"
 
 
 class ApplicationStepStatus(StrEnum):

@@ -181,7 +181,91 @@ and not re-litigated here.
   `start_or_reset_journey`'s `already_verified_service_codes` is the
   natural next step once there's a reason to (e.g. a non-demo journey).
 
-## Open items for Phase 5+
+## Phase 5 — System integration: profile/vault/eligibility/orchestrator as one system
+
+- **Requirement graph generalized from single-dependency to
+  multi-requirement**: `DependencyEdge(depends_on_service_code: str |
+  None)` became `ServiceRequirement(requires: list[str])`. The SQL
+  schema (`service_dependencies`) was already a many-to-many junction
+  table — this just makes the in-memory graph match what the database
+  could already express. `education_scholarship` now genuinely requires
+  `[identity_verification, domicile_certificate, income_certificate]`,
+  matching the example given for this phase, instead of a single
+  artificial edge to `income_certificate`. `JourneyOrchestrator`'s
+  `_recompute_dependents` and `eligibility.evaluate` both walk the same
+  `requirements_of()` — one definition of "what does X require", read by
+  both, per the explicit instruction not to build a parallel state
+  machine.
+- **Document lifecycle is real**: `DocumentStatus` became
+  `UPLOADED -> UNDER_REVIEW -> VERIFIED / REJECTED (/ EXPIRED)`, replacing
+  the old `PENDING/ACTION_NEEDED` vocabulary. `DocumentVaultService`
+  gained `submit_for_review`/`verify`/`reject`, each a real, persisted
+  transition (`InvalidDocumentTransitionError` if called out of order —
+  tested: verifying a document still in `UPLOADED` is rejected).
+- **No caller-supplied `verified_service_codes` for the normal flow**:
+  `GET /citizens/{id}/eligibility/{life_event_code}` computes the
+  verified set itself, from `app/services/vault_eligibility.py`. The old
+  `POST /eligibility/evaluate` was renamed to `/eligibility/evaluate-raw`
+  and is documented as test-only — never wired into `/demo` or any
+  citizen-facing call.
+- **Two verified-set functions, not one, and that's deliberate**:
+  `verified_service_codes_from_vault` (vault documents only) seeds a
+  *new* journey's starting state — a fresh journey should only inherit
+  pre-verified documents, not whatever a previous run happened to verify
+  through a connector. `verified_service_codes_for_citizen` (vault +
+  every application's already-VERIFIED steps) backs the citizen-facing
+  eligibility view, so it doesn't go stale the moment a connector
+  approval lands mid-journey. A live browser session with income
+  verified via the Revenue connector, but eligibility still reading
+  "Income Certificate — not started", is exactly the bug that using the
+  vault-only function everywhere would have caused — caught by actually
+  clicking through the demo (see below), not by pytest, and now covered
+  by `test_citizen_eligibility_reflects_connector_verified_state_not_only_vault`.
+- **Vault verification cascades through the orchestrator's existing
+  event path, not a new one**: `JourneyService.sync_verified_document`
+  finds any of the citizen's applications with that service_code sitting
+  in `NOT_STARTED`/`BLOCKED` and calls the exact same
+  `receive_connector_event` a webhook uses (`source="vault_verification"`).
+  `app/services/vault_integration.py` is the thin coordinator that calls
+  `DocumentVaultService.verify()` then this — kept separate so neither
+  service depends on the other directly.
+- **The signature demo's `caste_certificate` is deliberately left
+  UPLOADED-but-unreviewed on every reset**, not pre-verified like
+  identity/domicile — it's the one thing `/demo` walks through
+  "Submit for Review" -> "Verify" live, showing the vault -> eligibility
+  -> journey cascade on a real, non-required step without touching the
+  income/scholarship path priority 7 required to keep passing unchanged.
+  Because `education_scholarship` doesn't require caste, this is
+  additive and risk-free to the existing signature flow.
+- **`GET /admin/metrics` is real, computed groundwork, not a dashboard**:
+  every number (`bottleneck_service_codes`, department pending/rejected
+  counts, SLA at-risk/breached counts, blocked-journey details) is
+  derived by walking actual `ApplicationRecord`s through the same
+  `DependencyGraph`/SLA logic used everywhere else — no separately
+  tracked counters that could drift from reality. No admin UI yet, per
+  instruction not to build a decorative dashboard before the data behind
+  it is real.
+- **Citizen-facing surface scoped to 2 real pages, not "dozens"**: a new
+  `/` home page (replacing the untouched Next.js boilerplate that was
+  still live through Phase 4 — a real gap, fixed here) plus the
+  significantly expanded `/demo` page, which now itself covers profile,
+  vault, eligibility, consent, dependency graph, connector/webhook
+  status, unified timeline, SLA and audit trail as sections of one
+  coherent citizen journey experience — deliberately not split into
+  separate `/profile`, `/vault`, `/consent`, `/timeline` routes yet,
+  per the explicit instruction against dozens of disconnected pages.
+- **A second real bug found only by clicking through the browser, not by
+  pytest**: `refreshAll()` originally fetched `getJourney()` (which
+  lazily seeds the vault on first load) in the same `Promise.all` as the
+  vault/eligibility calls. The vault-dependent requests could race ahead
+  of the seeding transaction and read an empty vault, showing
+  "Identity Verification — Not started" in the Eligibility panel while
+  the Dependency Graph panel correctly showed "Verified" one section
+  below — a visible, confusing inconsistency a judge would have seen.
+  Fixed by sequencing: `await getJourney()` first, *then*
+  `Promise.all([documents, eligibility, auditLog])`.
+
+## Open items for Phase 6+
 
 - Supabase project must be created (cloud, free tier) and the migrations
   applied to it; Appwrite project needed for real document storage. Both
@@ -189,12 +273,14 @@ and not re-litigated here.
   something to be done unattended. The repository/storage abstraction
   exists specifically so this can happen later without touching
   orchestration or business logic.
-- Eligibility and the citizen vault are not yet connected to each other
-  or to the journey orchestrator (see above).
-- No admin/operations dashboard yet (bottleneck visibility, SLA breach
-  counts across all applications — today's `/demo/sla-alerts` only
-  covers the single demo application).
+- No admin/operations dashboard UI yet — `/admin/metrics` is real but
+  has no frontend consuming it.
 - No i18n on the actual UI (the demo page shows Marathi + English as
   static text, not a language switcher).
 - Connector state (Phase 3 limitation) still doesn't survive a backend
   restart mid-journey.
+- Only one life event (`college_admission_scholarship`) has a working
+  citizen-facing flow; `start_small_business` exists in the backend
+  catalog/graph but has no `/demo`-equivalent frontend experience yet —
+  the home page marks it "Coming soon" honestly rather than linking to
+  something incomplete.

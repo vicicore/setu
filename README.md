@@ -41,37 +41,51 @@ docker compose up -d
 Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
 Backend type check: `cd backend && ./venv/Scripts/python -m mypy`
 
-Status: Phase 1 (Foundation), Phase 2 (orchestration core + Supabase
-schema), Phase 3 (repository/storage abstraction + a real `/demo`
-frontend) and Phase 4 (webhook boundary, n8n workflows, eligibility
-engine, citizen profile/vault) are done.
+Status: Phases 1-4 (foundation, orchestration core + Supabase schema,
+repository/storage abstraction, webhook boundary/n8n/eligibility/vault)
+and Phase 5 (system integration — profile, vault, eligibility and the
+orchestrator working as one connected system) are done.
 
 - **Orchestration** (`backend/app/services/orchestrator.py`): a real
-  `JourneyOrchestrator` state machine — consent gating, dependency checks,
-  webhook-driven cascading unlock. Untouched by every layer built on top of it.
+  `JourneyOrchestrator` state machine — consent gating, multi-requirement
+  dependency checks, webhook-driven cascading unlock. Untouched by every
+  layer built on top of it, including this phase's integration work.
 - **Persistence is behind interfaces, not scattered**: API -> service layer
   (`JourneyService`, `CitizenProfileService`, `DocumentVaultService`) ->
   repository/storage ports -> `LocalJson*`/`LocalDisk*` adapters. Supabase/
   Appwrite become new adapter classes later without touching orchestration
   or API code — see `docs/DECISIONS.md`.
-- **One event-processing path for connector status changes, not two**:
-  `POST /api/v1/webhooks/n8n/{event}` and the `/demo` approve action both
-  resolve to the same `JourneyService.receive_connector_event` call.
+- **One event-processing path for a service becoming verified, from
+  anywhere**: a connector webhook, the `/demo` approve action, and a vault
+  document verification (`DocumentVaultService.verify` +
+  `JourneyService.sync_verified_document`) all resolve to the exact same
+  `JourneyService.receive_connector_event` call. No parallel state machine.
+- **No caller-supplied eligibility state for the normal flow**:
+  `GET /citizens/{id}/eligibility/{life_event_code}` derives the verified
+  set from the citizen's actual vault documents *and* any already-verified
+  step in their applications — so it doesn't go stale the moment a
+  connector approval lands mid-journey (a real bug this phase's browser
+  testing caught and fixed).
+- **Service requirements are explicit, multi-value data** — `education_scholarship`
+  now genuinely requires identity + domicile + income all verified
+  (`ServiceRequirement.requires: list[str]`), not a single artificial edge.
+- **Document lifecycle is real**: `UPLOADED -> UNDER_REVIEW -> VERIFIED / REJECTED`,
+  each transition persisted and rejected if called out of order.
 - **2 n8n workflows** (`infra/n8n/workflows/`), verified by actually
   importing them into a disposable n8n instance and exporting them back
   out intact — not just hand-written JSON.
-- **Eligibility engine** (`POST /api/v1/eligibility/evaluate`): deterministic
-  rules over the dependency graph, every result comes with a plain-language
-  reason — no LLM in the eligibility decision path.
-- **Citizen profile + document vault** (`/api/v1/citizens/{id}/profile`,
-  `/api/v1/citizens/{id}/documents`) on the local adapters, enforcing the
-  5MB/MIME-allowlist upload rules already, not deferred until Appwrite exists.
-- 4 mock department connectors (Revenue/Education/Social Justice/Labour)
-  behind one common interface, and the full Supabase schema + RLS
-  (`backend/app/db/migrations/`, verified against a real Postgres container).
-- 26 passing backend tests, `mypy` clean across 53 source files, frontend
-  build + lint clean, full demo flow re-verified live in a browser after
-  every phase.
+- **`/admin/metrics`**: real numbers (bottlenecks, department pending/rejected
+  counts, SLA at-risk/breached, blocked journeys) computed by walking actual
+  application state — groundwork for the eventual dashboard, no dashboard UI yet.
+- **A real, professional home page** (`/`) plus a significantly expanded
+  `/demo` that now shows the citizen's profile, vault, eligibility (with
+  plain-language reasons), dependency graph, connector/webhook status,
+  unified timeline and audit trail as one coherent journey — 2 pages, not
+  dozens.
+- 33 passing backend tests, `mypy` clean across 58 source files, frontend
+  build + lint clean, full demo flow (including the new vault-verification
+  path) re-verified live in a browser — twice, catching 2 real bugs in the
+  process (see `docs/DECISIONS.md`).
 - Supabase/Appwrite are still only wired for configuration, not connected
   to live projects — deliberately deferred; the abstraction above exists
   so that's a later, isolated step.
