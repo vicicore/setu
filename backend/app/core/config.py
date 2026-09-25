@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     local_data_dir: str = "app/data"
 
+    # Demo-safe auth (Phase 7) — deliberately not Aadhaar-backed. An
+    # "identifier" is any string a citizen logs in with (a phone number
+    # in a real deployment; anything in local dev/demo). Identifiers
+    # listed here are granted the "admin" role on first login — this is
+    # a local bootstrap mechanism, not how role assignment would work
+    # against real Supabase Auth (see docs/DECISIONS.md).
+    admin_identifiers: list[str] = ["admin"]
+    session_ttl_hours: int = 720  # 30 days — demo-friendly, not a security default
+
 
 @lru_cache
 def get_settings() -> Settings:

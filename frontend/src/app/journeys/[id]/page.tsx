@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ApiError, JourneyDetailView, journeyApi } from "@/lib/api";
 import { STATUS_CLASSES, STATUS_LABEL_KEY } from "@/lib/statusStyles";
+import { useAuth } from "@/lib/useAuth";
 import { useLanguage } from "@/lib/LanguageProvider";
 
 type ActionName = "consent" | "revoke" | "submit" | "approve" | null;
@@ -12,6 +14,7 @@ export default function JourneyDetailPage() {
   const params = useParams<{ id: string }>();
   const applicationId = params.id;
   const { t } = useLanguage();
+  const { token, isLoggedIn } = useAuth();
 
   const [journey, setJourney] = useState<JourneyDetailView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,11 +23,11 @@ export default function JourneyDetailPage() {
 
   const load = useCallback(async () => {
     try {
-      setJourney(await journeyApi.get(applicationId));
+      setJourney(await journeyApi.get(applicationId, token ?? undefined));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("error_generic"));
     }
-  }, [applicationId, t]);
+  }, [applicationId, token, t]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -48,6 +51,19 @@ export default function JourneyDetailPage() {
       setPendingService(null);
     }
   };
+
+  if (!isLoggedIn) {
+    return (
+      <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
+        <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          <Link href="/login" className="font-medium underline">
+            Log in
+          </Link>{" "}
+          to view this journey.
+        </p>
+      </main>
+    );
+  }
 
   if (error) {
     return (
@@ -191,6 +207,7 @@ export default function JourneyDetailPage() {
                         applicationId,
                         step.service_code,
                         `Process ${step.display_name}`,
+                        token ?? undefined,
                       ),
                     )
                   }
@@ -202,7 +219,7 @@ export default function JourneyDetailPage() {
                   pending={pendingAction === "revoke" && pendingService === step.service_code}
                   onClick={() =>
                     runAction(step.service_code, "revoke", () =>
-                      journeyApi.revokeConsent(applicationId, step.service_code),
+                      journeyApi.revokeConsent(applicationId, step.service_code, token ?? undefined),
                     )
                   }
                 />
@@ -212,7 +229,7 @@ export default function JourneyDetailPage() {
                   pending={pendingAction === "submit" && pendingService === step.service_code}
                   onClick={() =>
                     runAction(step.service_code, "submit", () =>
-                      journeyApi.submit(applicationId, step.service_code),
+                      journeyApi.submit(applicationId, step.service_code, {}, token ?? undefined),
                     )
                   }
                 />
@@ -222,7 +239,7 @@ export default function JourneyDetailPage() {
                   pending={pendingAction === "approve" && pendingService === step.service_code}
                   onClick={() =>
                     runAction(step.service_code, "approve", () =>
-                      journeyApi.approve(applicationId, step.service_code),
+                      journeyApi.approve(applicationId, step.service_code, token ?? undefined),
                     )
                   }
                 />

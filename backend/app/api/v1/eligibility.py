@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.container import get_application_repository, get_document_repository
+from app.core.security import get_current_session, require_owner_or_admin
+from app.repositories.models import SessionRecord
 from app.schemas.eligibility import EligibilityEvaluateRequest, EligibilityEvaluateResult
 from app.services import eligibility as eligibility_engine
 from app.services import vault_eligibility
@@ -13,7 +15,11 @@ router = APIRouter(tags=["eligibility"])
     "/citizens/{citizen_id}/eligibility/{life_event_code}",
     response_model=EligibilityEvaluateResult,
 )
-def evaluate_citizen_eligibility(citizen_id: str, life_event_code: str) -> EligibilityEvaluateResult:
+def evaluate_citizen_eligibility(
+    citizen_id: str,
+    life_event_code: str,
+    session: SessionRecord = Depends(get_current_session),
+) -> EligibilityEvaluateResult:
     """The normal flow: verified_service_codes is computed from the
     citizen's actual verified vault documents plus any already-verified
     step in one of their applications (so a requirement satisfied via a
@@ -21,6 +27,7 @@ def evaluate_citizen_eligibility(citizen_id: str, life_event_code: str) -> Eligi
     otherwise this view would go stale the moment a connector approval
     landed). Never supplied by the caller. This is what /demo and any
     citizen-facing UI should call."""
+    require_owner_or_admin(citizen_id, session)
     try:
         graph = get_graph(life_event_code)
     except ValueError as exc:

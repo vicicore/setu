@@ -3,6 +3,7 @@ lossless for everything the orchestrator relies on (status, consent,
 SLA fields, timeline) — the seam that lets JourneyOrchestrator stay
 storage-agnostic while a repository still persists its full state."""
 
+from app.repositories.local.connector_request_repository import LocalJsonConnectorRequestRepository
 from app.services.connectors.revenue import RevenueMockConnector
 from app.services.dependency_graph import COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH
 from app.services.journey_mapper import to_domain, to_record
@@ -18,7 +19,7 @@ def test_round_trip_preserves_state_through_a_full_scenario() -> None:
         already_verified_service_codes={"identity_verification", "domicile_certificate", "caste_certificate"},
     )
     orchestrator.grant_consent(journey, "income_certificate", purpose="test purpose")
-    connector = RevenueMockConnector()
+    connector = RevenueMockConnector(LocalJsonConnectorRequestRepository())
     ref = orchestrator.submit_to_connector(journey, "income_certificate", connector, payload={})
     connector.simulate_approval(ref)
     orchestrator.receive_connector_event(journey, "income_certificate", event_status="approved")

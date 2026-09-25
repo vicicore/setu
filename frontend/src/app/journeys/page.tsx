@@ -3,27 +3,41 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ApiError, JourneySummaryView, journeyApi } from "@/lib/api";
-import { useCitizenId } from "@/lib/useCitizenId";
+import { useAuth } from "@/lib/useAuth";
 import { useLanguage } from "@/lib/LanguageProvider";
 
 export default function JourneysPage() {
   const { t } = useLanguage();
-  const [citizenId] = useCitizenId();
+  const { citizenId, token, isLoggedIn } = useAuth();
   const [journeys, setJourneys] = useState<JourneySummaryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!citizenId) return;
     try {
-      setJourneys(await journeyApi.listForCitizen(citizenId));
+      setJourneys(await journeyApi.listForCitizen(citizenId, token ?? undefined));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("error_generic"));
     }
-  }, [citizenId, t]);
+  }, [citizenId, token, t]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  if (!isLoggedIn || !citizenId) {
+    return (
+      <main className="mx-auto min-h-screen max-w-4xl px-4 py-10 sm:px-6">
+        <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          <Link href="/login" className="font-medium underline">
+            Log in
+          </Link>{" "}
+          to view your journeys.
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl px-4 py-10 sm:px-6">

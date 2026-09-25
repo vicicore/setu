@@ -11,12 +11,16 @@ from app.core.config import get_settings
 from app.repositories.interfaces import (
     ApplicationRepository,
     AuditLogRepository,
+    AuthRepository,
     CitizenRepository,
+    ConnectorRequestRepository,
     DocumentRepository,
 )
 from app.repositories.local.application_repository import LocalJsonApplicationRepository
 from app.repositories.local.audit_log_repository import LocalJsonAuditLogRepository
+from app.repositories.local.auth_repository import LocalJsonAuthRepository
 from app.repositories.local.citizen_repository import LocalJsonCitizenRepository
+from app.repositories.local.connector_request_repository import LocalJsonConnectorRequestRepository
 from app.repositories.local.document_repository import LocalJsonDocumentRepository
 from app.services.connectors.base import GovernmentConnector
 from app.services.connectors.education import EducationMockConnector
@@ -26,6 +30,7 @@ from app.services.connectors.labour import LabourMockConnector
 from app.services.connectors.revenue import RevenueMockConnector
 from app.services.connectors.social_justice import SocialJusticeMockConnector
 from app.services.connectors.urban_development import UrbanDevelopmentMockConnector
+from app.services.auth_service import AuthService
 from app.services.document_service import DocumentVaultService
 from app.services.citizen_service import CitizenProfileService
 from app.services.journey_service import JourneyService
@@ -65,25 +70,36 @@ def get_document_storage() -> DocumentStoragePort:
 
 
 @lru_cache
+def get_connector_request_repository() -> ConnectorRequestRepository:
+    settings = get_settings()
+    if settings.persistence_backend == "local":
+        return LocalJsonConnectorRequestRepository()
+    raise NotImplementedError(
+        f"persistence_backend={settings.persistence_backend!r} has no connector-request repository wired yet"
+    )
+
+
+@lru_cache
 def get_revenue_connector() -> RevenueMockConnector:
-    """Connector instances hold live request state (department system of
-    record, in production). For the demo they're process-wide singletons
-    so an approval simulated later in the same run can find the request
-    a submit created earlier — this is a demo-scope simplification, not
-    a persistence guarantee; see docs/DECISIONS.md."""
-    return RevenueMockConnector()
+    """Connectors are now stateless wrappers over
+    ConnectorRequestRepository (Phase 7) — kept as cached singletons for
+    consistency with the other factories here, not because correctness
+    depends on it anymore; a fresh instance would behave identically
+    since all request state lives in the repository, surviving restarts."""
+    return RevenueMockConnector(get_connector_request_repository())
 
 
 @lru_cache
 def _connector_registry() -> dict[str, GovernmentConnector]:
+    repo = get_connector_request_repository()
     return {
         "Revenue": get_revenue_connector(),
-        "Higher Education": EducationMockConnector(),
-        "Social Justice": SocialJusticeMockConnector(),
-        "Labour": LabourMockConnector(),
-        "Urban Development": UrbanDevelopmentMockConnector(),
-        "Finance": FinanceMockConnector(),
-        "Home": HomeAffairsMockConnector(),
+        "Higher Education": EducationMockConnector(repo),
+        "Social Justice": SocialJusticeMockConnector(repo),
+        "Labour": LabourMockConnector(repo),
+        "Urban Development": UrbanDevelopmentMockConnector(repo),
+        "Finance": FinanceMockConnector(repo),
+        "Home": HomeAffairsMockConnector(repo),
     }
 
 
@@ -135,4 +151,21 @@ def get_citizen_profile_service() -> CitizenProfileService:
 
 @lru_cache
 def get_document_vault_service() -> DocumentVaultService:
-    return DocumentVaultService(get_document_repository(), get_document_storage())
+    return DocumentVaultService(
+        get_document_repository(), get_document_storage(), get_audit_log_repository()
+    )
+
+
+@lru_cache
+def get_auth_repository() -> AuthRepository:
+    settings = get_settings()
+    if settings.persistence_backend == "local":
+        return LocalJsonAuthRepository()
+    raise NotImplementedError(
+        f"persistence_backend={settings.persistence_backend!r} has no auth repository wired yet"
+    )
+
+
+@lru_cache
+def get_auth_service() -> AuthService:
+    return AuthService(get_auth_repository())

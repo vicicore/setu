@@ -1,17 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, JourneyDetailView, journeyApi, lifeEventApi } from "@/lib/api";
+import { ApiError, JourneyDetailView, authApi, journeyApi, lifeEventApi } from "@/lib/api";
 import { STATUS_CLASSES, STATUS_LABEL_KEY } from "@/lib/statusStyles";
 import { useLanguage } from "@/lib/LanguageProvider";
 import { DemoButton } from "./DemoButton";
 
 const LIFE_EVENT_CODE = "start_small_business";
-// A fixed demo citizen so this panel behaves predictably in a live
-// judge session, without needing a second demo-specific endpoint set —
-// this scenario proves the *generic* /journeys API is real, not a
-// second copy of the College Admission implementation.
-const DEMO_BUSINESS_CITIZEN_ID = "demo-citizen-anil-jadhav";
+// A fixed demo login identifier so this panel behaves predictably in a
+// live judge session, without needing a second demo-specific endpoint
+// set — this scenario proves the *generic* /journeys API is real, not
+// a second copy of the College Admission implementation. The citizen_id
+// itself is derived server-side from this identifier at login time
+// (see backend/app/services/identity.py), not assigned by the client.
+const DEMO_BUSINESS_LOGIN_IDENTIFIER = "demo-small-business-registration";
 
 type ActionName = "start" | "consent" | "submit" | "approve" | null;
 
@@ -19,6 +21,8 @@ export function SmallBusinessPanel() {
   const { t } = useLanguage();
   const [journey, setJourney] = useState<JourneyDetailView | null>(null);
   const [goalStatement, setGoalStatement] = useState<{ en: string; mr: string } | null>(null);
+  const [demoCitizenId, setDemoCitizenId] = useState<string | null>(null);
+  const [demoToken, setDemoToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<ActionName>(null);
   const [pendingService, setPendingService] = useState<string | null>(null);
@@ -28,9 +32,16 @@ export function SmallBusinessPanel() {
     try {
       const meta = await lifeEventApi.get(LIFE_EVENT_CODE);
       setGoalStatement({ en: meta.goal_statement_en, mr: meta.goal_statement_mr });
-      const existing = await journeyApi.listForCitizen(DEMO_BUSINESS_CITIZEN_ID);
+      // Silent judge-mode login — see the comment on the identifier above.
+      const session = await authApi.login(DEMO_BUSINESS_LOGIN_IDENTIFIER);
+      setDemoCitizenId(session.citizen_id);
+      setDemoToken(session.token);
+      const existing = await journeyApi.listForCitizen(session.citizen_id, session.token);
       if (existing.length > 0) {
-        const detail = await journeyApi.get(existing[existing.length - 1].application_id);
+        const detail = await journeyApi.get(
+          existing[existing.length - 1].application_id,
+          session.token,
+        );
         setJourney(detail);
       }
     } catch (err) {
@@ -46,10 +57,11 @@ export function SmallBusinessPanel() {
   }, [loadExisting]);
 
   const startNewJourney = async () => {
+    if (!demoCitizenId || !demoToken) return;
     setPendingAction("start");
     setError(null);
     try {
-      const detail = await journeyApi.start(DEMO_BUSINESS_CITIZEN_ID, LIFE_EVENT_CODE);
+      const detail = await journeyApi.start(demoCitizenId, LIFE_EVENT_CODE, demoToken);
       setJourney(detail);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not start the journey.");
@@ -61,14 +73,14 @@ export function SmallBusinessPanel() {
   const runStepAction = async (
     serviceCode: string,
     action: ActionName,
-    fn: (applicationId: string) => Promise<JourneyDetailView>,
+    fn: (applicationId: string, token: string) => Promise<JourneyDetailView>,
   ) => {
-    if (!journey) return;
+    if (!journey || !demoToken) return;
     setPendingAction(action);
     setPendingService(serviceCode);
     setError(null);
     try {
-      const detail = await fn(journey.application_id);
+      const detail = await fn(journey.application_id, demoToken);
       setJourney(detail);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Action failed unexpectedly.");
@@ -170,11 +182,12 @@ export function SmallBusinessPanel() {
                         disabled={!canGrant}
                         pending={pendingAction === "consent" && pendingService === step.service_code}
                         onClick={() =>
-                          runStepAction(step.service_code, "consent", (id) =>
+                          runStepAction(step.service_code, "consent", (id, token) =>
                             journeyApi.grantConsent(
                               id,
                               step.service_code,
                               `Process ${step.display_name}`,
+                              token,
                             ),
                           )
                         }
@@ -184,8 +197,8 @@ export function SmallBusinessPanel() {
                         disabled={!canSubmit}
                         pending={pendingAction === "submit" && pendingService === step.service_code}
                         onClick={() =>
-                          runStepAction(step.service_code, "submit", (id) =>
-                            journeyApi.submit(id, step.service_code),
+                          runStepAction(step.service_code, "submit", (id, token) =>
+                            journeyApi.submit(id, step.service_code, {}, token),
                           )
                         }
                       />
@@ -194,8 +207,8 @@ export function SmallBusinessPanel() {
                         disabled={!canApprove}
                         pending={pendingAction === "approve" && pendingService === step.service_code}
                         onClick={() =>
-                          runStepAction(step.service_code, "approve", (id) =>
-                            journeyApi.approve(id, step.service_code),
+                          runStepAction(step.service_code, "approve", (id, token) =>
+                            journeyApi.approve(id, step.service_code, token),
                           )
                         }
                       />

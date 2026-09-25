@@ -1,11 +1,12 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.core.container import (
     get_application_repository,
     get_document_vault_service,
     get_journey_service,
 )
-from app.repositories.models import DocumentRecord
+from app.core.security import get_current_session, require_owner_or_admin
+from app.repositories.models import DocumentRecord, SessionRecord
 from app.schemas.document import DocumentRejectRequest, DocumentUsedByJourney, DocumentView
 from app.services.document_service import DocumentNotFoundError, InvalidDocumentTransitionError
 from app.services.life_event_catalog import get_life_event_meta
@@ -51,8 +52,27 @@ def _to_view(record: DocumentRecord, url: str) -> DocumentView:
     )
 
 
+def _get_owned_document(document_id: str, citizen_id: str, session: SessionRecord) -> DocumentRecord:
+    """Fetches a document and verifies BOTH that the URL's citizen_id
+    actually owns it AND that the authenticated session is that citizen
+    (or admin) — a document_id alone is not proof of ownership, and a
+    citizen_id in the URL is not proof of identity."""
+    service = get_document_vault_service()
+    try:
+        record = service.get(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if record.citizen_id != citizen_id:
+        raise HTTPException(status_code=404, detail="Document not found for this citizen")
+    require_owner_or_admin(record.citizen_id, session)
+    return record
+
+
 @router.get("/{citizen_id}/documents", response_model=list[DocumentView])
-def list_documents(citizen_id: str) -> list[DocumentView]:
+def list_documents(
+    citizen_id: str, session: SessionRecord = Depends(get_current_session)
+) -> list[DocumentView]:
+    require_owner_or_admin(citizen_id, session)
     service = get_document_vault_service()
     records = service.list_for_citizen(citizen_id)
     return [_to_view(r, service.get_url(r)) for r in records]
@@ -64,7 +84,9 @@ async def upload_document(
     doc_type: str = Form(...),
     issuer: str | None = Form(default=None),
     file: UploadFile = File(...),
+    session: SessionRecord = Depends(get_current_session),
 ) -> DocumentView:
+    require_owner_or_admin(citizen_id, session)
     service = get_document_vault_service()
     file_bytes = await file.read()
     try:
@@ -82,19 +104,18 @@ async def upload_document(
 
 
 @router.get("/{citizen_id}/documents/{document_id}", response_model=DocumentView)
-def get_document(citizen_id: str, document_id: str) -> DocumentView:
-    service = get_document_vault_service()
-    try:
-        record = service.get(document_id)
-    except DocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if record.citizen_id != citizen_id:
-        raise HTTPException(status_code=404, detail="Document not found for this citizen")
-    return _to_view(record, service.get_url(record))
+def get_document(
+    citizen_id: str, document_id: str, session: SessionRecord = Depends(get_current_session)
+) -> DocumentView:
+    record = _get_owned_document(document_id, citizen_id, session)
+    return _to_view(record, get_document_vault_service().get_url(record))
 
 
 @router.post("/{citizen_id}/documents/{document_id}/submit-for-review", response_model=DocumentView)
-def submit_document_for_review(citizen_id: str, document_id: str) -> DocumentView:
+def submit_document_for_review(
+    citizen_id: str, document_id: str, session: SessionRecord = Depends(get_current_session)
+) -> DocumentView:
+    _get_owned_document(document_id, citizen_id, session)
     service = get_document_vault_service()
     try:
         record = service.submit_for_review(document_id)
@@ -104,11 +125,14 @@ def submit_document_for_review(citizen_id: str, document_id: str) -> DocumentVie
 
 
 @router.post("/{citizen_id}/documents/{document_id}/verify", response_model=DocumentView)
-def verify_document(citizen_id: str, document_id: str) -> DocumentView:
+def verify_document(
+    citizen_id: str, document_id: str, session: SessionRecord = Depends(get_current_session)
+) -> DocumentView:
     """Simulated verification (there is no real department reviewer in
     this prototype) — but the transition is real backend state, and it
     cascades into any active journey through the same event-processing
     path a connector webhook uses. See app/services/vault_integration.py."""
+    _get_owned_document(document_id, citizen_id, session)
     vault = get_document_vault_service()
     journeys = get_journey_service()
     try:
@@ -119,10 +143,16 @@ def verify_document(citizen_id: str, document_id: str) -> DocumentView:
 
 
 @router.post("/{citizen_id}/documents/{document_id}/reject", response_model=DocumentView)
-def reject_document(citizen_id: str, document_id: str, body: DocumentRejectRequest) -> DocumentView:
+def reject_document(
+    citizen_id: str,
+    document_id: str,
+    body: DocumentRejectRequest,
+    session: SessionRecord = Depends(get_current_session),
+) -> DocumentView:
     """Mirrors verify_document: rejection cascades into any waiting
     journey step through the same event path, so the requirement
     visibly remains unsatisfied rather than silently stuck."""
+    _get_owned_document(document_id, citizen_id, session)
     vault = get_document_vault_service()
     journeys = get_journey_service()
     try:

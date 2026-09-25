@@ -1,8 +1,11 @@
 import time
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+from app.repositories.interfaces import ConnectorRequestRepository
+from app.repositories.models import ConnectorRequestRecord
 
 
 @dataclass
@@ -15,29 +18,23 @@ class ConnectorResponse:
     next_action: str
 
 
-@dataclass
-class ConnectorRequestRecord:
-    external_reference: str
-    department: str
-    service_code: str
-    status: str
-    submitted_at: datetime
-    sla_deadline: datetime
-    payload: dict = field(default_factory=dict)
-
-
 class GovernmentConnector(ABC):
     """Common contract every department connector (mock or, later, real)
     must satisfy. See Master Prompt section 12 — this interface is what
     lets a mock connector be swapped for a real government API without
-    touching the orchestrator."""
+    touching the orchestrator.
+
+    Request bookkeeping is persisted through a ConnectorRequestRepository
+    rather than kept in a Python-process dict — a backend restart between
+    submit() and simulate_approval()/simulate_rejection() must not lose
+    it (Phase 7 priority 5)."""
 
     department: str
     default_sla_days: int = 7
     simulated_latency_seconds: float = 0.0
 
-    def __init__(self) -> None:
-        self._requests: dict[str, ConnectorRequestRecord] = {}
+    def __init__(self, repository: ConnectorRequestRepository) -> None:
+        self._repository = repository
 
     def submit(self, service_code: str, payload: dict) -> ConnectorResponse:
         if self.simulated_latency_seconds:
@@ -54,7 +51,7 @@ class GovernmentConnector(ABC):
             sla_deadline=deadline,
             payload=payload,
         )
-        self._requests[reference] = record
+        self._repository.save(record)
         return ConnectorResponse(
             external_reference=reference,
             department=self.department,
@@ -65,17 +62,22 @@ class GovernmentConnector(ABC):
         )
 
     def get_status(self, external_reference: str) -> ConnectorRequestRecord:
-        return self._requests[external_reference]
+        record = self._repository.get(external_reference)
+        if record is None:
+            raise KeyError(f"No connector request found for {external_reference!r}")
+        return record
 
     def simulate_approval(self, external_reference: str) -> ConnectorRequestRecord:
-        record = self._requests[external_reference]
+        record = self.get_status(external_reference)
         record.status = "approved"
+        self._repository.save(record)
         return record
 
     def simulate_rejection(self, external_reference: str, reason: str = "") -> ConnectorRequestRecord:
-        record = self._requests[external_reference]
+        record = self.get_status(external_reference)
         record.status = "rejected"
         record.payload["rejection_reason"] = reason
+        self._repository.save(record)
         return record
 
     @abstractmethod

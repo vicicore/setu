@@ -71,6 +71,25 @@ class DocumentRecord(BaseModel):
     updated_at: datetime
 
 
+class ConnectorRequestRecord(BaseModel):
+    """Persisted mirror of a connector's own bookkeeping. Before Phase 7
+    this lived only in the connector object's Python-process memory
+    (`GovernmentConnector._requests`), so a backend restart between
+    submit and approve/reject lost it — `simulate_approval` would
+    KeyError even though the JourneyStep itself (external_reference,
+    status=IN_PROGRESS) survived fine via the application repository.
+    Persisting this closes that gap using the same repository
+    abstraction, not a second state store."""
+
+    external_reference: str
+    department: str
+    service_code: str
+    status: str
+    submitted_at: datetime
+    sla_deadline: datetime
+    payload: dict = Field(default_factory=dict)
+
+
 class AuditLogEntry(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     application_id: str | None = None
@@ -80,3 +99,26 @@ class AuditLogEntry(BaseModel):
     resource_id: str | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime
+
+
+class AccountRecord(BaseModel):
+    """The authentication identity — deliberately separate from
+    CitizenProfileRecord (name/district/etc., citizen-editable). Not
+    Aadhaar-backed: `identifier` is a demo-safe stand-in (a phone number
+    or any string the citizen provides), matching the "safe demonstrable
+    identity model" requirement for a SIH prototype. When Supabase Auth
+    is wired, this becomes a thin cache of `auth.users`, not a duplicate
+    identity store."""
+
+    citizen_id: str
+    identifier: str
+    role: str = "citizen"  # "citizen" | "admin"
+    created_at: datetime
+
+
+class SessionRecord(BaseModel):
+    token: str
+    citizen_id: str
+    role: str
+    created_at: datetime
+    expires_at: datetime

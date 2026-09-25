@@ -13,6 +13,15 @@ export const translations = {
   nav_profile: { en: "Profile", mr: "प्रोफाइल" },
   nav_demo: { en: "Judge Demo", mr: "परीक्षक डेमो" },
   nav_admin: { en: "Admin", mr: "प्रशासन" },
+  nav_login: { en: "Log in", mr: "लॉग इन करा" },
+  nav_logout: { en: "Log out", mr: "लॉग आउट करा" },
+
+  login_title: { en: "Log in to SETU", mr: "SETU मध्ये लॉग इन करा" },
+  login_identifier_label: {
+    en: "Phone number or ID (demo: any text — no OTP or Aadhaar in this prototype)",
+    mr: "फोन नंबर किंवा ओळखपत्र (डेमो: कोणताही मजकूर — या प्रोटोटाइपमध्ये OTP किंवा आधार नाही)",
+  },
+  login_button: { en: "Continue", mr: "पुढे जा" },
 
   home_tagline: {
     en: "Citizens shouldn't have to know which department provides a service. Tell SETU what you need — it discovers the required government services, reuses what's already verified, and coordinates the rest.",

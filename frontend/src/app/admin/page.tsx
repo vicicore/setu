@@ -1,24 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { AdminMetrics, ApiError, adminApi } from "@/lib/api";
+import { useAuth } from "@/lib/useAuth";
 
 export default function AdminPage() {
+  const { role, token, isLoggedIn } = useAuth();
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setMetrics(await adminApi.getMetrics());
+      setMetrics(await adminApi.getMetrics(token ?? undefined));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the SETU backend API.");
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
-  }, [load]);
+    if (role === "admin") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      load();
+    }
+  }, [load, role]);
+
+  if (!isLoggedIn || role !== "admin") {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+        <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          {isLoggedIn ? (
+            "This account does not have admin access."
+          ) : (
+            <>
+              <Link href="/login" className="font-medium underline">
+                Log in
+              </Link>{" "}
+              with an admin account to view this page.
+            </>
+          )}
+        </p>
+      </main>
+    );
+  }
 
   if (error) {
     return (

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from app.repositories.interfaces import DocumentRepository
-from app.repositories.models import DocumentRecord
+from app.repositories.interfaces import AuditLogRepository, DocumentRepository
+from app.repositories.models import AuditLogEntry, DocumentRecord
 from app.schemas.enums import DocumentStatus
 from app.storage.interfaces import DocumentStoragePort
 
@@ -19,11 +19,31 @@ class DocumentVaultService:
     today, Appwrite later (Master Prompt section 4E). Metadata (who owns
     it, what type, verification status) lives in DocumentRepository; the
     file bytes live behind DocumentStoragePort — two different concerns,
-    two different ports, deliberately not conflated into one."""
+    two different ports, deliberately not conflated into one.
 
-    def __init__(self, document_repo: DocumentRepository, storage: DocumentStoragePort) -> None:
+    Also the one place that audits document lifecycle transitions
+    (upload/submit-for-review/verify/reject) — these must be recorded
+    even when a document has no active journey to cascade into, which
+    JourneyService's own audit trail (application-scoped) cannot cover."""
+
+    def __init__(
+        self, document_repo: DocumentRepository, storage: DocumentStoragePort, audit_repo: AuditLogRepository
+    ) -> None:
         self._documents = document_repo
         self._storage = storage
+        self._audit = audit_repo
+
+    def _audit_event(self, record: DocumentRecord, action: str, metadata: dict) -> None:
+        self._audit.append(
+            AuditLogEntry(
+                actor="citizen",
+                action=action,
+                resource_type="document",
+                resource_id=record.id,
+                metadata={"citizen_id": record.citizen_id, "doc_type": record.doc_type, **metadata},
+                created_at=datetime.now(timezone.utc),
+            )
+        )
 
     def upload(
         self,
@@ -47,7 +67,9 @@ class DocumentVaultService:
             created_at=now,
             updated_at=now,
         )
-        return self._documents.create(record)
+        created = self._documents.create(record)
+        self._audit_event(created, "document.uploaded", {"original_filename": stored.original_filename})
+        return created
 
     def list_for_citizen(self, citizen_id: str) -> list[DocumentRecord]:
         return self._documents.list_for_citizen(citizen_id)
@@ -77,7 +99,9 @@ class DocumentVaultService:
             )
         record.status = DocumentStatus.UNDER_REVIEW
         record.updated_at = datetime.now(timezone.utc)
-        return self._documents.save(record)
+        saved = self._documents.save(record)
+        self._audit_event(saved, "document.submitted_for_review", {})
+        return saved
 
     def verify(self, document_id: str) -> DocumentRecord:
         """UNDER_REVIEW -> VERIFIED. For the demo this is simulated
@@ -93,7 +117,9 @@ class DocumentVaultService:
         record.status = DocumentStatus.VERIFIED
         record.rejection_reason = None
         record.updated_at = datetime.now(timezone.utc)
-        return self._documents.save(record)
+        saved = self._documents.save(record)
+        self._audit_event(saved, "document.verified", {})
+        return saved
 
     def reject(self, document_id: str, reason: str) -> DocumentRecord:
         record = self.get(document_id)
@@ -104,4 +130,6 @@ class DocumentVaultService:
         record.status = DocumentStatus.REJECTED
         record.rejection_reason = reason
         record.updated_at = datetime.now(timezone.utc)
-        return self._documents.save(record)
+        saved = self._documents.save(record)
+        self._audit_event(saved, "document.rejected", {"reason": reason})
+        return saved

@@ -7,10 +7,13 @@ above this line changes."""
 from abc import ABC, abstractmethod
 
 from app.repositories.models import (
+    AccountRecord,
     ApplicationRecord,
     AuditLogEntry,
     CitizenProfileRecord,
+    ConnectorRequestRecord,
     DocumentRecord,
+    SessionRecord,
 )
 
 
@@ -79,3 +82,31 @@ class DocumentRepository(ABC):
 
     @abstractmethod
     def delete(self, document_id: str) -> None: ...
+
+
+class ConnectorRequestRepository(ABC):
+    """Backs GovernmentConnector so its bookkeeping survives a backend
+    restart — see ConnectorRequestRecord's docstring."""
+
+    @abstractmethod
+    def save(self, record: ConnectorRequestRecord) -> ConnectorRequestRecord: ...
+
+    @abstractmethod
+    def get(self, external_reference: str) -> ConnectorRequestRecord | None: ...
+
+
+class AuthRepository(ABC):
+    @abstractmethod
+    def get_account_by_identifier(self, identifier: str) -> AccountRecord | None: ...
+
+    @abstractmethod
+    def create_account(self, record: AccountRecord) -> AccountRecord: ...
+
+    @abstractmethod
+    def create_session(self, record: SessionRecord) -> SessionRecord: ...
+
+    @abstractmethod
+    def get_session(self, token: str) -> SessionRecord | None: ...
+
+    @abstractmethod
+    def delete_session(self, token: str) -> None: ...

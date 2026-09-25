@@ -41,10 +41,8 @@ docker compose up -d
 Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
 Backend type check: `cd backend && ./venv/Scripts/python -m mypy`
 
-Status: Phases 1-5 (foundation through system integration) and Phase 6
-(productization — a real citizen-facing product shell, journey detail
-page, consent UX, admin dashboard, a second real journey, i18n, and a
-judge-mode `/demo`) are done.
+Status: Phases 1-6 (foundation through productization) plus Phase 7
+(identity, persistence, security hardening) are done.
 
 - **Orchestration** (`backend/app/services/orchestrator.py`): a real
   `JourneyOrchestrator` state machine — consent gating, multi-requirement
@@ -77,10 +75,48 @@ judge-mode `/demo`) are done.
   CSS contrast break, a missing mock connector, and a UI/backend gating
   bug that silently blocked consent on an unlocked step). Full detail in
   `docs/DECISIONS.md`.
-- Supabase/Appwrite are still only wired for configuration, not connected
-  to live projects — deliberately deferred; the repository/storage
-  abstraction exists so that's a later, isolated step. Nothing in Phase 6
-  required it.
+
+**Phase 7 — identity, persistence, security hardening:**
+
+- **Real citizen authentication**: `POST /auth/session {identifier}`
+  issues a server-verified bearer token — not Aadhaar, not yet Supabase
+  Auth, but a real credential the backend derives a citizen_id from and
+  checks on every request. Replaces the old browser-local, user-editable
+  `useCitizenId()` placeholder entirely; `/login` is the only place a
+  citizen types an identifier now.
+- **Server-side authorization on every citizen-scoped endpoint**:
+  `require_owner_or_admin` stops citizen A from reading citizen B's
+  profile, documents, journeys, or consent by editing a URL — proven by
+  dedicated cross-citizen isolation tests
+  (`backend/app/tests/test_authorization.py`), not left to the frontend.
+- **Persistent application + connector state**: every mock connector's
+  request bookkeeping moved from an in-memory dict to a repository —
+  proven by a test that clears every cached singleton mid-run to
+  simulate a real backend restart and confirms an in-progress journey is
+  still fully operable afterward.
+- **Consent security**: active consent authorizes a connector exchange,
+  revoked consent blocks it, expired consent blocks it independently of
+  revocation — all three proven explicitly
+  (`backend/app/tests/test_consent_security.py`).
+- **Document lifecycle is now fully audited**, including uploads with no
+  active journey behind them yet — a real gap found and fixed this
+  phase, not just tested.
+- **Admin-only `/admin/metrics`**, enforced server-side.
+- **API hardening**: a global exception handler that never leaks
+  internals on an unexpected error, basic security response headers, and
+  a documented (not yet implemented — no real edge infrastructure exists
+  for it) rate-limiting strategy.
+- 54 passing backend tests (11 new this phase), `mypy` clean across 73
+  source files, frontend build + lint clean, full live browser regression
+  of every existing flow (College Admission, Small Business, rejection,
+  English↔Marathi) after the auth integration. Full detail, including the
+  RLS review and the demo panels' silent-login mechanism, in
+  `docs/DECISIONS.md`.
+- Supabase/Appwrite remain unwired — this phase's authentication and
+  storage requirements were both met without them (see DECISIONS.md,
+  "Not required this phase"); the repository/storage abstraction still
+  exists specifically so either can be wired in later without an
+  orchestrator or API rewrite.
 
 Try it locally:
 

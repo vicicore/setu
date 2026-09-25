@@ -21,6 +21,7 @@ export interface DemoCatalogService {
 
 export interface DemoCatalogView {
   citizen_id: string;
+  login_identifier: string;
   life_event_code: string;
   citizen_goal_statement_en: string;
   citizen_goal_statement_mr: string;
@@ -221,18 +222,57 @@ async function handleResponse<T>(path: string, response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function readStoredToken(): string | null {
+  try {
+    return localStorage.getItem("setu-auth-token");
+  } catch {
+    return null;
+  }
+}
+
+interface RequestOptions extends RequestInit {
+  /** Overrides the globally-logged-in user's token for this one call —
+   * used by the judge-mode /demo panels, which silently authenticate as
+   * a fixed demo identity without touching (or requiring) a real
+   * logged-in citizen's session. */
+  token?: string;
+}
+
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
+  const { token, ...init } = options ?? {};
+  const authToken = token ?? readStoredToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      ...init.headers,
+    },
   });
   return handleResponse<T>(path, response);
 }
 
-async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { method: "POST", body: formData });
+async function uploadRequest<T>(path: string, formData: FormData, token?: string): Promise<T> {
+  const authToken = token ?? readStoredToken();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+    headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+  });
   return handleResponse<T>(path, response);
 }
+
+export interface SessionView {
+  token: string;
+  citizen_id: string;
+  role: string;
+  expires_at: string;
+}
+
+export const authApi = {
+  login: (identifier: string) =>
+    request<SessionView>("/auth/session", { method: "POST", body: JSON.stringify({ identifier }) }),
+};
 
 export const demoApi = {
   getCatalog: () => request<DemoCatalogView>("/demo/catalog"),
@@ -252,36 +292,41 @@ export const demoApi = {
 };
 
 export const citizenApi = {
-  getProfile: (citizenId: string) => request<CitizenProfileView>(`/citizens/${citizenId}/profile`),
-  upsertProfile: (citizenId: string, update: CitizenProfileUpdate) =>
+  getProfile: (citizenId: string, token?: string) =>
+    request<CitizenProfileView>(`/citizens/${citizenId}/profile`, { token }),
+  upsertProfile: (citizenId: string, update: CitizenProfileUpdate, token?: string) =>
     request<CitizenProfileView>(`/citizens/${citizenId}/profile`, {
       method: "PUT",
       body: JSON.stringify(update),
+      token,
     }),
-  getDocuments: (citizenId: string) =>
-    request<DocumentView[]>(`/citizens/${citizenId}/documents`),
-  uploadDocument: (citizenId: string, file: File, docType: string, issuer?: string) => {
+  getDocuments: (citizenId: string, token?: string) =>
+    request<DocumentView[]>(`/citizens/${citizenId}/documents`, { token }),
+  uploadDocument: (citizenId: string, file: File, docType: string, issuer?: string, token?: string) => {
     const form = new FormData();
     form.set("doc_type", docType);
     if (issuer) form.set("issuer", issuer);
     form.set("file", file);
-    return uploadRequest<DocumentView>(`/citizens/${citizenId}/documents`, form);
+    return uploadRequest<DocumentView>(`/citizens/${citizenId}/documents`, form, token);
   },
-  submitDocumentForReview: (citizenId: string, documentId: string) =>
+  submitDocumentForReview: (citizenId: string, documentId: string, token?: string) =>
     request<DocumentView>(`/citizens/${citizenId}/documents/${documentId}/submit-for-review`, {
       method: "POST",
+      token,
     }),
-  verifyDocument: (citizenId: string, documentId: string) =>
+  verifyDocument: (citizenId: string, documentId: string, token?: string) =>
     request<DocumentView>(`/citizens/${citizenId}/documents/${documentId}/verify`, {
       method: "POST",
+      token,
     }),
-  rejectDocument: (citizenId: string, documentId: string, reason: string) =>
+  rejectDocument: (citizenId: string, documentId: string, reason: string, token?: string) =>
     request<DocumentView>(`/citizens/${citizenId}/documents/${documentId}/reject`, {
       method: "POST",
       body: JSON.stringify({ reason }),
+      token,
     }),
-  getEligibility: (citizenId: string, lifeEventCode: string) =>
-    request<EligibilityEvaluateResult>(`/citizens/${citizenId}/eligibility/${lifeEventCode}`),
+  getEligibility: (citizenId: string, lifeEventCode: string, token?: string) =>
+    request<EligibilityEvaluateResult>(`/citizens/${citizenId}/eligibility/${lifeEventCode}`, { token }),
 };
 
 export const lifeEventApi = {
@@ -290,34 +335,45 @@ export const lifeEventApi = {
 };
 
 export const journeyApi = {
-  start: (citizenId: string, lifeEventCode: string) =>
+  start: (citizenId: string, lifeEventCode: string, token?: string) =>
     request<JourneyDetailView>(`/citizens/${citizenId}/journeys`, {
       method: "POST",
       body: JSON.stringify({ life_event_code: lifeEventCode }),
+      token,
     }),
-  listForCitizen: (citizenId: string) =>
-    request<JourneySummaryView[]>(`/citizens/${citizenId}/journeys`),
-  get: (applicationId: string) => request<JourneyDetailView>(`/journeys/${applicationId}`),
-  grantConsent: (applicationId: string, serviceCode: string, purpose: string) =>
+  listForCitizen: (citizenId: string, token?: string) =>
+    request<JourneySummaryView[]>(`/citizens/${citizenId}/journeys`, { token }),
+  get: (applicationId: string, token?: string) =>
+    request<JourneyDetailView>(`/journeys/${applicationId}`, { token }),
+  grantConsent: (applicationId: string, serviceCode: string, purpose: string, token?: string) =>
     request<JourneyDetailView>(`/journeys/${applicationId}/consent/${serviceCode}`, {
       method: "POST",
       body: JSON.stringify({ purpose }),
+      token,
     }),
-  revokeConsent: (applicationId: string, serviceCode: string) =>
+  revokeConsent: (applicationId: string, serviceCode: string, token?: string) =>
     request<JourneyDetailView>(`/journeys/${applicationId}/consent/${serviceCode}/revoke`, {
       method: "POST",
+      token,
     }),
-  submit: (applicationId: string, serviceCode: string, payload: Record<string, unknown> = {}) =>
+  submit: (
+    applicationId: string,
+    serviceCode: string,
+    payload: Record<string, unknown> = {},
+    token?: string,
+  ) =>
     request<JourneyDetailView>(`/journeys/${applicationId}/submit/${serviceCode}`, {
       method: "POST",
       body: JSON.stringify({ payload }),
+      token,
     }),
-  approve: (applicationId: string, serviceCode: string) =>
+  approve: (applicationId: string, serviceCode: string, token?: string) =>
     request<JourneyDetailView>(`/journeys/${applicationId}/approve/${serviceCode}`, {
       method: "POST",
+      token,
     }),
 };
 
 export const adminApi = {
-  getMetrics: () => request<AdminMetrics>("/admin/metrics"),
+  getMetrics: (token?: string) => request<AdminMetrics>("/admin/metrics", { token }),
 };

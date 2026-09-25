@@ -5,6 +5,7 @@ state produced by the orchestrator + a mock connector."""
 
 import pytest
 
+from app.repositories.local.connector_request_repository import LocalJsonConnectorRequestRepository
 from app.schemas.enums import ApplicationStepStatus
 from app.services.connectors.revenue import RevenueMockConnector
 from app.services.dependency_graph import COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH
@@ -50,7 +51,7 @@ def test_signature_demo_end_to_end(orchestrator: JourneyOrchestrator) -> None:
 
     # 3. Submitting to the Revenue connector without consent must fail —
     #    consent is not decorative.
-    connector = RevenueMockConnector()
+    connector = RevenueMockConnector(LocalJsonConnectorRequestRepository())
     with pytest.raises(ConsentRequiredError):
         orchestrator.submit_to_connector(
             journey, "income_certificate", connector, payload={"citizen_id": "citizen-demo-1"}
@@ -102,7 +103,7 @@ def test_cannot_submit_before_dependency_is_verified(orchestrator: JourneyOrches
         already_verified_service_codes=set(),  # nothing verified yet
     )
     orchestrator.grant_consent(journey, "education_scholarship", purpose="test")
-    connector = RevenueMockConnector()
+    connector = RevenueMockConnector(LocalJsonConnectorRequestRepository())
     with pytest.raises(DependencyNotMetError):
         orchestrator.submit_to_connector(
             journey, "education_scholarship", connector, payload={}
@@ -116,7 +117,7 @@ def test_rejection_blocks_dependents_with_reason(orchestrator: JourneyOrchestrat
         graph=COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH,
         already_verified_service_codes={"identity_verification", "domicile_certificate", "caste_certificate"},
     )
-    connector = RevenueMockConnector()
+    connector = RevenueMockConnector(LocalJsonConnectorRequestRepository())
     orchestrator.grant_consent(journey, "income_certificate", purpose="test")
     ref = orchestrator.submit_to_connector(journey, "income_certificate", connector, payload={})
     connector.simulate_rejection(ref, reason="Income proof insufficient")

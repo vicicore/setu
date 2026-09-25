@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiError, LifeEventSummary, journeyApi, lifeEventApi } from "@/lib/api";
-import { useCitizenId } from "@/lib/useCitizenId";
+import { useAuth } from "@/lib/useAuth";
 import { useLanguage } from "@/lib/LanguageProvider";
 
 export default function ServicesPage() {
   const router = useRouter();
   const { language, t } = useLanguage();
-  const [citizenId] = useCitizenId();
+  const { citizenId, token, isLoggedIn } = useAuth();
   const [lifeEvents, setLifeEvents] = useState<LifeEventSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [startingCode, setStartingCode] = useState<string | null>(null);
@@ -28,10 +29,14 @@ export default function ServicesPage() {
   }, [load]);
 
   const startJourney = async (code: string) => {
+    if (!isLoggedIn || !citizenId) {
+      router.push("/login");
+      return;
+    }
     setStartingCode(code);
     setError(null);
     try {
-      const journey = await journeyApi.start(citizenId, code);
+      const journey = await journeyApi.start(citizenId, code, token ?? undefined);
       router.push(`/journeys/${journey.application_id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("error_generic"));
@@ -45,7 +50,16 @@ export default function ServicesPage() {
         <h1 className="text-3xl font-bold text-slate-900">{t("home_tell_us")}</h1>
         <p className="mt-2 text-slate-600">
           Every life event below is a real orchestration graph in SETU — pick one to start a
-          journey for citizen <span className="font-mono text-xs">{citizenId}</span>.
+          journey.
+          {!isLoggedIn && (
+            <>
+              {" "}
+              <Link href="/login" className="font-medium underline">
+                Log in
+              </Link>{" "}
+              first to start one.
+            </>
+          )}
         </p>
       </header>
 

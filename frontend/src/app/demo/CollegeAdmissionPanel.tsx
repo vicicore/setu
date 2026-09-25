@@ -8,6 +8,7 @@ import {
   DemoJourneyView,
   DocumentView,
   EligibilityEvaluateResult,
+  authApi,
   citizenApi,
   demoApi,
 } from "@/lib/api";
@@ -34,28 +35,38 @@ export function CollegeAdmissionPanel() {
   const [documents, setDocuments] = useState<DocumentView[]>([]);
   const [eligibility, setEligibility] = useState<EligibilityEvaluateResult | null>(null);
   const [auditLog, setAuditLog] = useState<DemoAuditEntryView[]>([]);
+  const [demoToken, setDemoToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<ActionName>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshAll = useCallback(async (citizenId: string, lifeEventCode: string) => {
-    const journeyView = await demoApi.getJourney();
-    const [docs, elig, audit] = await Promise.all([
-      citizenApi.getDocuments(citizenId),
-      citizenApi.getEligibility(citizenId, lifeEventCode),
-      demoApi.getAuditLog(),
-    ]);
-    setJourney(journeyView);
-    setDocuments(docs);
-    setEligibility(elig);
-    setAuditLog(audit);
-  }, []);
+  const refreshAll = useCallback(
+    async (citizenId: string, lifeEventCode: string, token: string) => {
+      const journeyView = await demoApi.getJourney();
+      const [docs, elig, audit] = await Promise.all([
+        citizenApi.getDocuments(citizenId, token),
+        citizenApi.getEligibility(citizenId, lifeEventCode, token),
+        demoApi.getAuditLog(),
+      ]);
+      setJourney(journeyView);
+      setDocuments(docs);
+      setEligibility(elig);
+      setAuditLog(audit);
+    },
+    [],
+  );
 
   const loadAll = useCallback(async () => {
     try {
       const catalogView = await demoApi.getCatalog();
       setCatalog(catalogView);
-      await refreshAll(catalogView.citizen_id, catalogView.life_event_code);
+      // Judge mode authenticates silently as the fixed demo identity —
+      // a real bearer token from the same auth path a citizen uses, not
+      // a bypass, so /citizens/* and /journeys/* calls below stay
+      // genuinely authorized rather than trusting a client-supplied id.
+      const session = await authApi.login(catalogView.login_identifier);
+      setDemoToken(session.token);
+      await refreshAll(catalogView.citizen_id, catalogView.life_event_code, session.token);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the SETU backend API.");
     } finally {
@@ -69,12 +80,12 @@ export function CollegeAdmissionPanel() {
   }, [loadAll]);
 
   const runAction = async (name: ActionName, fn: () => Promise<DemoJourneyView>) => {
-    if (!catalog) return;
+    if (!catalog || !demoToken) return;
     setPendingAction(name);
     setError(null);
     try {
       await fn();
-      await refreshAll(catalog.citizen_id, catalog.life_event_code);
+      await refreshAll(catalog.citizen_id, catalog.life_event_code, demoToken);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Action failed unexpectedly.");
     } finally {

@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.schemas.enums import ApplicationStepStatus
-from app.services import eligibility
+from app.services import demo_scenario, eligibility
 from app.services.dependency_graph import COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH
+from app.tests.conftest import login
 
 client = TestClient(app)
 
@@ -71,10 +72,10 @@ def test_eligibility_raw_endpoint_rejects_unknown_life_event() -> None:
 def test_citizen_eligibility_endpoint_derives_verified_set_from_vault() -> None:
     """The normal flow: no verified_service_codes in the request at
     all — the endpoint computes it from the citizen's actual vault."""
-    citizen_id = "citizen-eligibility-vault-test"
+    citizen_id, headers = login(client)
 
     before = client.get(
-        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship"
+        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship", headers=headers
     )
     assert before.status_code == 200
     scholarship = next(
@@ -87,13 +88,17 @@ def test_citizen_eligibility_endpoint_derives_verified_set_from_vault() -> None:
             f"/api/v1/citizens/{citizen_id}/documents",
             data={"doc_type": doc_type},
             files={"file": (f"{doc_type}.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            headers=headers,
         )
         document_id = upload.json()["id"]
-        client.post(f"/api/v1/citizens/{citizen_id}/documents/{document_id}/submit-for-review")
-        client.post(f"/api/v1/citizens/{citizen_id}/documents/{document_id}/verify")
+        client.post(
+            f"/api/v1/citizens/{citizen_id}/documents/{document_id}/submit-for-review",
+            headers=headers,
+        )
+        client.post(f"/api/v1/citizens/{citizen_id}/documents/{document_id}/verify", headers=headers)
 
     after = client.get(
-        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship"
+        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship", headers=headers
     )
     scholarship = next(
         s for s in after.json()["services"] if s["service_code"] == "education_scholarship"
@@ -114,9 +119,12 @@ def test_citizen_eligibility_reflects_connector_verified_state_not_only_vault() 
 
     catalog = client.get("/api/v1/demo/catalog").json()
     citizen_id = catalog["citizen_id"]
+    assert citizen_id == demo_scenario.DEMO_CITIZEN_ID
+    _logged_in_citizen_id, headers = login(client, identifier=demo_scenario.DEMO_LOGIN_IDENTIFIER)
+    assert _logged_in_citizen_id == citizen_id
 
     eligibility = client.get(
-        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship"
+        f"/api/v1/citizens/{citizen_id}/eligibility/college_admission_scholarship", headers=headers
     ).json()
     income = next(
         s for s in eligibility["services"] if s["service_code"] == "income_certificate"

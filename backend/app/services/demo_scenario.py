@@ -8,8 +8,15 @@ from dataclasses import dataclass
 
 from app.services.dependency_graph import COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH, DependencyGraph
 from app.services.document_service import DocumentVaultService
+from app.services.identity import derive_citizen_id
 
-DEMO_CITIZEN_ID = "demo-citizen-priya-deshmukh"
+# The frontend's judge-mode College Admission panel silently logs in
+# with this exact identifier (POST /auth/session) so it gets a real,
+# server-issued token for whatever citizen_id derive_citizen_id produces
+# here — one identity system, no special-cased "demo citizen" bypass in
+# auth. See docs/DECISIONS.md.
+DEMO_LOGIN_IDENTIFIER = "demo-college-admission-scholarship"
+DEMO_CITIZEN_ID = derive_citizen_id(DEMO_LOGIN_IDENTIFIER)
 DEMO_APPLICATION_ID = "demo-application-college-admission-scholarship"
 DEMO_LIFE_EVENT_CODE = "college_admission_scholarship"
 DEMO_GRAPH: DependencyGraph = COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH

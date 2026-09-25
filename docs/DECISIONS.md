@@ -409,20 +409,360 @@ event-processing path built in Phases 3-5 are untouched.
   under the existing definition; the frontend now permits both instead
   of blocking the optional path.
 
-## Open items for Phase 7+
+## Phase 7 — Identity, persistence, security hardening
+
+This phase turns the local/demo prototype into an authenticated,
+persistent, authorization-enforcing platform, without touching the
+orchestrator's business logic, without introducing Supabase/Appwrite
+(neither was actually required — see below), and without breaking the
+judge demo. **DEMO MODE vs PRODUCTION MODE boundary**: every identifier,
+credential and integration in this codebase today is demo-safe synthetic
+data over local adapters. Nothing here talks to Aadhaar, DigiLocker, a
+real Maharashtra department system, Supabase, or Appwrite — the
+repository/storage abstraction exists so those can be wired in later
+without an orchestrator or API rewrite, but claiming any of them are
+integrated today would be false. See "Not required this phase" below for
+why Supabase/Appwrite specifically weren't introduced.
+
+### Identity + authentication (Priority 2)
+
+- **Opaque bearer tokens, not Aadhaar, not Supabase Auth yet.**
+  `POST /auth/session {identifier}` (`app/api/v1/auth.py`) registers on
+  first use and returns a `secrets.token_urlsafe(32)` session token
+  (`app/services/auth_service.py`). `identifier` is deliberately generic
+  (a phone number in a real deployment; any string in local dev/demo) —
+  there is no OTP, no Aadhaar e-KYC, matching the explicit instruction
+  not to integrate real Aadhaar without authorization.
+- **`derive_citizen_id(identifier) = f"citizen-{sha256(identifier)[:16]}"`**
+  (`app/services/identity.py`) is the single source of truth for turning
+  an identifier into a citizen_id — used by both real login and demo
+  seeding (`demo_scenario.DEMO_CITIZEN_ID` is now *derived* from
+  `DEMO_LOGIN_IDENTIFIER`, not a separate hardcoded string). This means
+  logging in as the demo identifier produces exactly the demo citizen,
+  proven by `test_citizen_eligibility_reflects_connector_verified_state_not_only_vault`.
+- **Why this shape, not a JWT library**: the seam that matters is
+  `get_current_session(authorization) -> SessionRecord` in
+  `app/core/security.py`. Swapping in real Supabase Auth later means
+  replacing this one function's body (verify a Supabase JWT, look up
+  `auth.users`) — no route handler changes, since every handler already
+  depends on `SessionRecord`, never on a raw citizen_id string.
+- **Session storage is a repository, not a dict**: `AuthRepository`
+  (`app/repositories/interfaces.py`) + `LocalJsonAuthRepository`
+  (`accounts.json`, `sessions.json`) — same pattern as every other piece
+  of state, so it survives a backend restart (see Persistence below) and
+  has a clear Supabase-adapter seam (`SupabaseAuthRepository` later,
+  though real Supabase Auth would likely replace most of this repository
+  rather than sit behind it — noted honestly, not hidden).
+
+### Authorization (Priority 3)
+
+- **`require_owner_or_admin(citizen_id, session)`** (`app/core/security.py`)
+  is called explicitly at the top of every handler that takes a
+  citizen_id path parameter — not via a `Depends` chain, because the
+  check needs the specific path parameter's value, not just "is there a
+  session." Raises 403 unless `session.citizen_id == citizen_id` or
+  `session.role == "admin"`.
+- **A citizen_id or document_id in a URL is never trusted alone.**
+  `vault.py::_get_owned_document` is the sharpest example: it checks
+  *both* that the document's actual owner matches the URL's citizen_id
+  *and* that the authenticated session is that citizen (or admin) —
+  a document_id is not proof of ownership, and a citizen_id in the URL
+  is not proof of identity. This closed a real gap found while
+  retrofitting: `submit-for-review`/`verify`/`reject` previously had
+  **zero** ownership check at all (only `get_document` checked).
+- **Dedicated cross-citizen isolation tests**: `app/tests/test_authorization.py`
+  — two independently-logged-in citizens, proving citizen A gets 403 (or
+  404, where ownership is checked past a not-found document) attempting
+  to read/write citizen B's profile, documents (list/get/upload/submit-
+  for-review/verify/reject), journeys (list/start/get/consent/revoke/
+  submit/approve), and eligibility. Also proves the admin branch of
+  `require_owner_or_admin` is real, not just the owner branch.
+  `test_admin_metrics.py::test_metrics_requires_admin_role` covers the
+  admin-only surface (Priority 10).
+
+### RLS review (Priority 4)
+
+`backend/app/db/migrations/0001_init.sql` (written in Phase 2, verified
+against a disposable Postgres container then) already encodes the target
+RLS model for when Supabase is wired — reviewed here against the current
+local-adapter authorization model rather than weakened or rewritten:
+
+| Data category | Table(s) | Who can read | Who can write |
+|---|---|---|---|
+| Citizen identity/profile | `citizens`, `profiles` | Owner (`auth.uid() = id`); officials scoped to their district or all (super_admin) | Owner only |
+| Documents + verifications | `documents`, `document_verifications` | Owner; officials (read) | Owner (documents); verification rows are official-authored |
+| Journeys/applications | `applications`, `application_steps` | Owner; officials | Owner writes applications; steps follow the parent application |
+| Consent | `consents` | Owner only (not official-readable — consent is between citizen and the recipient department, not a staff dashboard concern) | Owner only |
+| Connector requests/events | `connector_requests`, `connector_events` | Owner (via their application/step); officials | service_role only (backend), no citizen-facing write policy |
+| SLA records | `sla_records` | Owner; officials | service_role only |
+| Notifications | `notifications` | Owner only | Owner only |
+| Audit logs | `audit_logs` | Officials only (`is_official()`) — a citizen cannot read their own audit trail via RLS directly; the app exposes a scoped view over the same data through `GET /demo/audit-log` instead | service_role only (backend) |
+| Service/life-event catalog, district analytics | `services`, `life_events`, `service_dependencies`, `district_analytics` | Public read (no PII) for the catalog; `district_analytics` official-only | service_role only |
+
+`citizens.id references auth.users(id)` — matching exactly how
+`derive_citizen_id` + real Supabase Auth would line up once wired: the
+citizen_id this backend already uses everywhere becomes the Supabase
+`auth.users.id`, not a second parallel identifier. No RLS policy was
+loosened to make the current local-adapter demo work, because the
+current demo doesn't run against this schema at all yet (see below).
+
+### Persistent state (Priority 5)
+
+- **`ConnectorRequestRepository`** (`app/repositories/interfaces.py` +
+  `app/repositories/local/connector_request_repository.py`) replaces the
+  in-memory `dict` every mock connector (`GovernmentConnector` base
+  class, `app/services/connectors/base.py`) used to hold its request
+  bookkeeping in. Every connector now takes the repository in its
+  constructor; `container._connector_registry` injects the same shared
+  repository into all of them.
+- **Proof, not assertion**: `test_restart_persistence.py` clears every
+  `container.py` `lru_cache` mid-test (`_restart_backend()`) — the only
+  way a state-carrying singleton could survive that is if it was
+  actually written to disk. Confirms an in-progress application, its
+  connector external_reference, and the session token itself all survive
+  and remain fully operable (`approve` still works, dependency
+  resolution still cascades) after the simulated restart.
+- This directly resolves the Phase 3-noted limitation that connector
+  state didn't survive a backend restart mid-journey.
+
+### Consent security (Priority 6)
+
+`Consent.is_active` (`app/services/orchestrator.py`) was already
+correct — checks `revoked_at is None and expires_at > now` — but had no
+dedicated expiry test. `app/tests/test_consent_security.py` proves all
+three states explicitly: active consent authorizes the connector
+exchange; revoked consent blocks it (`ConsentRequiredError`); expired
+consent (via `validity_days=-1`, since the public API doesn't expose a
+citizen-chosen validity period) also blocks it, independently of
+revocation. Grant/revoke are additionally exercised end-to-end over HTTP
+in `test_journeys_api.py`.
+
+### Document security (Priority 7)
+
+Reviewed against the checklist, not rewritten — this was already mostly
+correct from Phase 4/5:
+
+- **MIME allow-list + 5MB limit** (`LocalDiskDocumentStorage`,
+  `Settings.max_upload_mb = 5`, never 15MB) — enforced server-side,
+  tested with an oversized file and a disallowed MIME type.
+- **No path traversal, no arbitrary file execution possible**: storage
+  keys are always server-generated (`uuid.uuid4().hex` + a MIME-derived
+  extension) — the client-supplied filename is stored only as
+  `original_filename` metadata and never touches a filesystem path.
+- **Ownership + verification lifecycle**: see Authorization above —
+  every vault endpoint now checks ownership, including the three that
+  previously didn't.
+- **Rejection reasons**: `DocumentRejectRequest.reason` is required and
+  surfaced on the record (`rejection_reason`), tested end to end
+  (`test_document_rejection_cascades_and_leaves_requirement_unsatisfied`).
+- **No sensitive bytes in logs**: confirmed by inspection — the only
+  `logger` call in the codebase (`app/main.py`'s unhandled-exception
+  handler, added this phase) logs only the HTTP method and path, never
+  headers, bodies, or file contents.
+- **Known limitation, not a Phase 7 regression**: `DocumentView.url`
+  (`/media/documents/{storage_key}`) is a URL *shape* returned by the
+  API — there is no route actually mounted to serve it yet (true since
+  Phase 4). Practically this means there is currently no way to
+  download a stored file's bytes at all, which is safe by omission but
+  worth fixing deliberately (with its own authorization check) before
+  a document *preview* feature is built — not done here as it wasn't
+  part of this phase's scope.
+
+### API security (Priority 8)
+
+- **Global exception handler** (`app/main.py`): every *expected* failure
+  already raised a specific `HTTPException` with a safe message in its
+  own handler (verified by grepping every `except ... raise
+  HTTPException(..., str(exc))` in `app/api/v1/` — all catch narrow,
+  known exception types, never a bare `Exception`, so `str(exc)` is
+  always a controlled domain message, not a stack trace). The new
+  `@app.exception_handler(Exception)` is the backstop for a genuine bug:
+  it logs the real exception server-side and returns a fixed
+  `{"detail": "Internal server error"}` — internals never reach a client
+  even if a future handler forgets to catch something.
+- **Security headers middleware** (`app/main.py`): `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` on
+  every response.
+- **CORS**: unchanged from Phase 1 — locked to `http://localhost:3000`,
+  extended only via `.env` for a real deployed frontend origin. Not
+  loosened this phase.
+- **Input validation**: every request body is a Pydantic schema
+  (`app/schemas/`); path parameters that must resolve to a real
+  entity (life event code, service code, application id, document id)
+  already 404 through existing `ValueError`/`KeyError` handling.
+- **Rate limiting — strategy documented, not implemented this phase**:
+  the highest-value target is `POST /auth/session` (unlimited identifier
+  guesses/account creation). The correct mechanism for a real deployment
+  is an edge/gateway-level limiter (Supabase's own or a reverse proxy),
+  keyed by IP for the unauthenticated login endpoint and by citizen_id
+  for authenticated endpoints — not an in-process Python limiter, which
+  wouldn't survive the multi-instance deployment a real gateway already
+  implies. Not implemented here because there is no real edge
+  infrastructure yet for it to live in (single local process, no
+  gateway), and adding an in-process limiter would be security theater
+  for a judge demo rather than a real control — noted honestly as a gap
+  rather than faked.
+- **Secrets**: no secret is exposed to the frontend (`SUPABASE_SERVICE_ROLE_KEY`
+  etc. are backend-only env vars, unused this phase since Supabase isn't
+  wired yet); session tokens are opaque and carry no embedded claims to
+  leak if logged (and they aren't logged — see Document security above).
+
+### Audit trail (Priority 9)
+
+- Journey-level events (`journey.reset`, `consent.granted`,
+  `consent.revoked`, `connector.submitted`, `connector.event_received`)
+  were already audited by `JourneyService` since Phase 3/4 —
+  `application_id`-scoped, via `AuditLogRepository`.
+- **Gap found and fixed this phase**: that scoping meant a document with
+  no active journey requiring its doc_type (e.g. a `supplementary_document`
+  upload, or any document uploaded before a journey exists) left
+  **upload/submit-for-review/verify/reject completely unaudited** —
+  `JourneyService.sync_verified_document`/`sync_rejected_document` only
+  write an audit entry when they find a matching journey step. Fixed by
+  moving document-lifecycle auditing into `DocumentVaultService` itself
+  (`document.uploaded`/`document.submitted_for_review`/`document.verified`/
+  `document.rejected`, `resource_type="document"`, `application_id=None`)
+  — independent of whether a journey ever cascades from it. Regression
+  test: `test_document_lifecycle_is_audited_even_without_an_active_journey`.
+- **Not added this phase**: SLA breach events are computed on read
+  (`compute_sla_status`) rather than written as discrete audit entries
+  when a deadline passes — there is no background job in this
+  architecture that would notice the transition at the moment it
+  happens (see Phase 4's n8n `sla-monitoring` workflow, which polls
+  rather than pushes). Documented as a gap rather than fabricating an
+  event that nothing actually triggers.
+
+### Admin authorization (Priority 10)
+
+`require_admin(session)` (403 unless `session.role == "admin"`) gates
+`GET /admin/metrics`. Role is assigned at account-creation time only, if
+the login identifier is in `Settings.admin_identifiers` (default:
+`["admin"]`) — a local bootstrap mechanism explicitly documented as not
+how role assignment would work against real Supabase Auth (that would be
+a `role` claim or a separate `officials` table row, matching
+`0001_init.sql`'s `officials`/`official_role` model). Frontend gate:
+`/admin` checks `role === "admin"` from `useAuth()` and shows an access
+message instead of the dashboard for anyone else — enforced by the
+backend regardless of what the frontend does or doesn't render.
+
+### Preserving the existing demo (Priorities 11-12)
+
+- **Every citizen-facing endpoint now requires authentication**, which
+  would have broken both Judge Mode panels outright (they never logged
+  in). Fixed by giving each panel a fixed, silent login: `CollegeAdmissionPanel`
+  logs in as `demo_scenario.DEMO_LOGIN_IDENTIFIER` (returned by
+  `GET /demo/catalog` as `login_identifier`, so the frontend never
+  hardcodes it independently of the backend's derivation) and threads
+  the resulting token through its `citizenApi`/`journeyApi` calls;
+  `SmallBusinessPanel` does the same with a new fixed identifier,
+  `demo-small-business-registration`. Neither panel's *business logic*
+  changed — same deterministic seeded state, same real backend
+  processing, same event-processing path.
+  The `/demo/*` endpoints themselves (`app/api/v1/demo.py`) were
+  deliberately left unauthenticated — they always operate on the one
+  fixed demo citizen/application regardless of caller, so adding session
+  auth to them would add a login requirement without adding a real
+  authorization boundary (there's only ever one demo citizen for them to
+  authorize against). The generic `/citizens/*` and `/journeys/*`
+  endpoints they call *into* (for documents/eligibility/journeys) are
+  fully authenticated — those are shared with the real citizen surface,
+  which is where authorization actually needed to be enforced.
+- Full regression re-verified live in the browser after the auth
+  integration: College Admission (Reset → Vault → Eligibility → Consent
+  → Submit Income → Approve → Scholarship Ready → Timeline), Small
+  Business (Start → Registration → Urban Development → Finance →
+  Complete), the rejection flow, and English↔Marathi toggle.
+
+### Frontend: real login replacing the citizen-ID placeholder
+
+- **`useAuth()`** (`frontend/src/lib/useAuth.ts`) replaces
+  `useCitizenId()` (deleted) — stores a real server-issued token,
+  citizen_id and role in `localStorage`, not a free-text, user-editable
+  citizen_id. `/login` (new) is the only place a citizen types an
+  identifier; every other page reads `useAuth()` and shows a "Log in"
+  prompt instead of a request if there's no session.
+  `frontend/src/lib/api.ts`'s `request()`/`uploadRequest()` attach
+  `Authorization: Bearer <token>` automatically from `localStorage`,
+  with an optional per-call `token` override — the mechanism the demo
+  panels use to authenticate as their fixed identity without touching
+  (or requiring) whatever citizen is actually logged in in the browser.
+- **`NavBar`** shows Log in/Log out based on `useAuth().isLoggedIn`, and
+  only shows the Admin link when `role === "admin"`.
+
+### Bugs found via live browser use this phase (not by code review)
+
+- **A real concurrency bug in the JSON persistence layer, hit only by
+  the auth integration**: `JsonFileStore.__init__` always writes its
+  `default` value if the target file doesn't exist yet — safe under a
+  single writer, but `container.py`'s `@lru_cache`d factories have no
+  "single-flight" behavior, so two concurrent requests that are each
+  the very first to touch a brand-new data directory (exactly what
+  happens when both Judge Mode panels silently log in at once against a
+  freshly reset `app/data/`) can each construct their own
+  `JsonFileStore` for `accounts.json` before either result is cached.
+  Both then tried to write the same fixed `accounts.json.tmp` path
+  simultaneously; on Windows, one process's `os.replace` failed with
+  `WinError 32` (target file in use by the other), surfacing to the
+  browser as a CORS error (the crashed response never reached
+  `CORSMiddleware` cleanly) — genuinely confusing until the backend's
+  own traceback (visible because this was live `uvicorn --reload`, not
+  the new production-safe exception handler) showed the real
+  `PermissionError`. Fixed by giving every write its own unique temp
+  filename (`app/repositories/local/json_file_store.py`) — whichever of
+  two equivalent concurrent initial writes wins the rename no longer
+  matters, since both are writing the same `default` content.
+- **`useAuth()` didn't stay in sync across components**: `NavBar` and
+  whichever page is open each call `useAuth()` independently, and each
+  call originally created its own isolated `useState`. Logging in from
+  `/login` updated that page's own state and `localStorage`, but
+  `NavBar`'s separate hook instance had no way to know — it kept
+  showing "Log in" after a successful client-side-routed login until a
+  full page reload. Fixed with a small same-tab event
+  (`window.dispatchEvent`/`addEventListener` on a `"setu-auth-changed"`
+  event) that every `useAuth()` instance emits on login/logout and
+  listens for to resync from `localStorage` — confirmed fixed by
+  logging in via a real link click (not a raw navigation) and watching
+  `NavBar` flip to "Log out" immediately.
+- Both found during this phase's full live-browser regression (login,
+  College Admission, Small Business, Marathi toggle, admin gate) run
+  against the actual `uvicorn`/`next dev` servers, not just by reading
+  the diff.
+
+### Not required this phase: Supabase, Appwrite
+
+Both remain unwired, deliberately: **Supabase** — this phase authenticates
+via an opaque token issued and verified entirely by this backend, which
+is what Priority 2 actually asked for ("real citizen authentication...
+NOT Aadhaar"); a Supabase project doesn't have to exist for that
+requirement to be met, and everything in `get_current_session`/
+`AuthRepository` is already shaped as a drop-in seam for real Supabase
+JWT verification the moment a project exists and is explicitly
+requested. **Appwrite** — no new document-storage requirement was
+introduced this phase (the vault's MIME/size/ownership rules were
+already real, local-adapter-backed); introducing Appwrite now would be
+adding infrastructure the phase's actual priorities didn't need, against
+the explicit instruction not to introduce it "just because it exists in
+the original architecture documentation." Both remain the natural next
+step per the repository/storage abstraction, whenever real storage or
+real identity verification is explicitly requested.
+
+## Open items for Phase 8+
 
 - Supabase project must be created (cloud, free tier) and the migrations
   applied to it; Appwrite project needed for real document storage. Both
   need account creation, which requires the project owner — not
   something to be done unattended. The repository/storage abstraction
   exists specifically so this can happen later without touching
-  orchestration or business logic. Nothing in Phase 6 required it.
-- No real citizen authentication — `useCitizenId()` is a browser-local
-  placeholder, not a security boundary.
-- i18n covers key screens, not every string (see above) — a full
-  translation pass is future work.
-- Connector state (Phase 3 limitation) still doesn't survive a backend
-  restart mid-journey.
+  orchestration or business logic.
+- No route currently serves `DocumentView.url` — see Document security
+  above.
+- No real rate limiting — see API security above.
+- SLA breaches are computed on read, not pushed as discrete audit
+  events — see Audit trail above.
+- Admin role assignment (`admin_identifiers`) is a local bootstrap
+  mechanism, not how it would work against real Supabase Auth/officials.
+- i18n covers key screens, not every string (unchanged since Phase 6) —
+  the new `/login` page and admin access-denied messages are English-only.
 - Admin dashboard has no "average processing time" metric — the spec
   said not to fabricate one, and there isn't yet enough real completed-
   journey history to compute it meaningfully.

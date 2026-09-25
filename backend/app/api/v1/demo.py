@@ -87,6 +87,7 @@ def get_catalog() -> DemoCatalogView:
     _require_demo_mode()
     return DemoCatalogView(
         citizen_id=demo_scenario.DEMO_CITIZEN_ID,
+        login_identifier=demo_scenario.DEMO_LOGIN_IDENTIFIER,
         life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
         citizen_goal_statement_en=demo_scenario.CITIZEN_GOAL_STATEMENT_EN,
         citizen_goal_statement_mr=demo_scenario.CITIZEN_GOAL_STATEMENT_MR,

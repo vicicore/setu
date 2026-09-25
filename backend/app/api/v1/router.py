@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, citizens, demo, eligibility, health, journeys, life_events, vault, webhooks
+from app.api.v1 import admin, auth, citizens, demo, eligibility, health, journeys, life_events, vault, webhooks
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+api_router.include_router(auth.router)
 api_router.include_router(demo.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(eligibility.router)

@@ -14,6 +14,7 @@ class DemoCatalogService(BaseModel):
 
 class DemoCatalogView(BaseModel):
     citizen_id: str
+    login_identifier: str
     life_event_code: str
     citizen_goal_statement_en: str
     citizen_goal_statement_mr: str

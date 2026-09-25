@@ -1,16 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { ApiError, DocumentView, citizenApi } from "@/lib/api";
 import { DOC_STATUS_CLASSES, DOC_STATUS_LABEL_KEY } from "@/lib/statusStyles";
-import { useCitizenId } from "@/lib/useCitizenId";
+import { useAuth } from "@/lib/useAuth";
 import { useLanguage } from "@/lib/LanguageProvider";
 
 type ActionName = "upload" | "review" | "verify" | "reject" | null;
 
 export default function VaultPage() {
   const { t } = useLanguage();
-  const [citizenId] = useCitizenId();
+  const { citizenId, token, isLoggedIn } = useAuth();
   const [documents, setDocuments] = useState<DocumentView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionName>(null);
@@ -19,12 +20,13 @@ export default function VaultPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
+    if (!citizenId) return;
     try {
-      setDocuments(await citizenApi.getDocuments(citizenId));
+      setDocuments(await citizenApi.getDocuments(citizenId, token ?? undefined));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("error_generic"));
     }
-  }, [citizenId, t]);
+  }, [citizenId, token, t]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -33,11 +35,11 @@ export default function VaultPage() {
 
   const handleUpload = async () => {
     const file = fileInputRef.current?.files?.[0];
-    if (!file) return;
+    if (!file || !citizenId) return;
     setPendingAction("upload");
     setError(null);
     try {
-      await citizenApi.uploadDocument(citizenId, file, docType);
+      await citizenApi.uploadDocument(citizenId, file, docType, undefined, token ?? undefined);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await load();
     } catch (err) {
@@ -61,6 +63,19 @@ export default function VaultPage() {
       setPendingId(null);
     }
   };
+
+  if (!isLoggedIn || !citizenId) {
+    return (
+      <main className="mx-auto min-h-screen max-w-4xl px-4 py-10 sm:px-6">
+        <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          <Link href="/login" className="font-medium underline">
+            Log in
+          </Link>{" "}
+          to view your documents.
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl px-4 py-10 sm:px-6">
@@ -140,7 +155,7 @@ export default function VaultPage() {
                     pending={busy && pendingAction === "review"}
                     onClick={() =>
                       runDocAction(doc.id, "review", () =>
-                        citizenApi.submitDocumentForReview(citizenId, doc.id),
+                        citizenApi.submitDocumentForReview(citizenId, doc.id, token ?? undefined),
                       )
                     }
                   />
@@ -149,7 +164,9 @@ export default function VaultPage() {
                     disabled={doc.status !== "under_review"}
                     pending={busy && pendingAction === "verify"}
                     onClick={() =>
-                      runDocAction(doc.id, "verify", () => citizenApi.verifyDocument(citizenId, doc.id))
+                      runDocAction(doc.id, "verify", () =>
+                        citizenApi.verifyDocument(citizenId, doc.id, token ?? undefined),
+                      )
                     }
                   />
                   <VaultButton
@@ -159,7 +176,12 @@ export default function VaultPage() {
                     pending={busy && pendingAction === "reject"}
                     onClick={() =>
                       runDocAction(doc.id, "reject", () =>
-                        citizenApi.rejectDocument(citizenId, doc.id, "Document illegible — please re-upload"),
+                        citizenApi.rejectDocument(
+                          citizenId,
+                          doc.id,
+                          "Document illegible — please re-upload",
+                          token ?? undefined,
+                        ),
                       )
                     }
                   />

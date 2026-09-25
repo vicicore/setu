@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/LanguageProvider";
+import { useAuth } from "@/lib/useAuth";
 
 const LINKS = [
   { href: "/", labelKey: "nav_home" as const },
@@ -14,7 +15,9 @@ const LINKS = [
 
 export function NavBar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { language, setLanguage, t } = useLanguage();
+  const { isLoggedIn, citizenId, role, logout } = useAuth();
 
   return (
     <header className="border-b border-slate-200 bg-white">
@@ -47,14 +50,35 @@ export function NavBar() {
           >
             {t("nav_demo")}
           </Link>
-          <Link
-            href="/admin"
-            className={`rounded-md px-3 py-1.5 font-medium transition ${
-              pathname === "/admin" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            {t("nav_admin")}
-          </Link>
+          {role === "admin" && (
+            <Link
+              href="/admin"
+              className={`rounded-md px-3 py-1.5 font-medium transition ${
+                pathname === "/admin" ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-100"
+              }`}
+            >
+              {t("nav_admin")}
+            </Link>
+          )}
+          {isLoggedIn ? (
+            <button
+              onClick={() => {
+                logout();
+                router.push("/");
+              }}
+              className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100"
+              title={citizenId ?? undefined}
+            >
+              {t("nav_logout")}
+            </button>
+          ) : (
+            <Link
+              href="/login"
+              className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            >
+              {t("nav_login")}
+            </Link>
+          )}
           <div className="ml-2 flex items-center rounded-md border border-slate-200 text-xs">
             <button
               className={`rounded-l-md px-2 py-1 font-medium ${
