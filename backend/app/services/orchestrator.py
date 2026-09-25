@@ -25,6 +25,8 @@ class JourneyStep:
     status: ApplicationStepStatus
     blocked_reason: str | None = None
     external_reference: str | None = None
+    submitted_at: datetime | None = None
+    sla_due_at: datetime | None = None
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -47,6 +49,7 @@ class Consent:
 class Journey:
     id: str
     citizen_id: str
+    life_event_code: str
     graph: DependencyGraph
     steps: dict[str, JourneyStep]
     consents: dict[str, Consent] = field(default_factory=dict)
@@ -72,15 +75,19 @@ class JourneyOrchestrator:
     def start_journey(
         self,
         citizen_id: str,
+        life_event_code: str,
         graph: DependencyGraph,
         already_verified_service_codes: set[str],
+        journey_id: str | None = None,
     ) -> Journey:
         journey = Journey(
-            id=str(uuid.uuid4()),
+            id=journey_id or str(uuid.uuid4()),
             citizen_id=citizen_id,
+            life_event_code=life_event_code,
             graph=graph,
             steps={},
         )
+        journey.timeline.append(f"Journey started for citizen {citizen_id}")
         for service_code in graph.service_codes:
             if service_code in already_verified_service_codes:
                 journey.steps[service_code] = JourneyStep(
@@ -91,7 +98,6 @@ class JourneyOrchestrator:
                     service_code, ApplicationStepStatus.NOT_STARTED
                 )
         self._recompute_dependents(journey, graph.service_codes)
-        journey.timeline.append(f"Journey started for citizen {citizen_id}")
         return journey
 
     def grant_consent(
@@ -142,6 +148,8 @@ class JourneyOrchestrator:
         response = connector.submit(service_code, payload)
         step.status = ApplicationStepStatus.IN_PROGRESS
         step.external_reference = response.external_reference
+        step.submitted_at = response.timestamp
+        step.sla_due_at = response.sla_deadline
         step.updated_at = datetime.now(timezone.utc)
         journey.timeline.append(
             f"{service_code} submitted to {connector.department} — "

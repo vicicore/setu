@@ -25,6 +25,7 @@ def test_signature_demo_end_to_end(orchestrator: JourneyOrchestrator) -> None:
     # synthetic citizen; income certificate has not been obtained yet.
     journey = orchestrator.start_journey(
         citizen_id="citizen-demo-1",
+        life_event_code="college_admission_scholarship",
         graph=COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH,
         already_verified_service_codes={
             "identity_verification",
@@ -35,6 +36,10 @@ def test_signature_demo_end_to_end(orchestrator: JourneyOrchestrator) -> None:
 
     # 1. Income certificate has no connector submission yet -> NOT_STARTED.
     assert journey.step("income_certificate").status == ApplicationStepStatus.NOT_STARTED
+
+    # 1b. The timeline must narrate events in the order they actually
+    # happened — "journey started" before any derived step status.
+    assert journey.timeline[0] == "Journey started for citizen citizen-demo-1"
 
     # 2. Scholarship is blocked purely because income_certificate isn't
     #    verified yet — this is computed, not hardcoded.
@@ -92,6 +97,7 @@ def test_signature_demo_end_to_end(orchestrator: JourneyOrchestrator) -> None:
 def test_cannot_submit_before_dependency_is_verified(orchestrator: JourneyOrchestrator) -> None:
     journey = orchestrator.start_journey(
         citizen_id="citizen-demo-2",
+        life_event_code="college_admission_scholarship",
         graph=COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH,
         already_verified_service_codes=set(),  # nothing verified yet
     )
@@ -106,6 +112,7 @@ def test_cannot_submit_before_dependency_is_verified(orchestrator: JourneyOrches
 def test_rejection_blocks_dependents_with_reason(orchestrator: JourneyOrchestrator) -> None:
     journey = orchestrator.start_journey(
         citizen_id="citizen-demo-3",
+        life_event_code="college_admission_scholarship",
         graph=COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH,
         already_verified_service_codes={"identity_verification", "domicile_certificate", "caste_certificate"},
     )

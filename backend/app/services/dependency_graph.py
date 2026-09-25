@@ -59,3 +59,19 @@ START_SMALL_BUSINESS_GRAPH = DependencyGraph([
     DependencyEdge("local_noc", "business_registration", "Urban Development", "Local Body NOC"),
     DependencyEdge("gst_registration", "business_registration", "Finance", "GST Registration"),
 ])
+
+# Registry keyed by the same life_event.code values seeded in
+# 0002_seed_catalog.sql — lets a persisted ApplicationRecord (which
+# stores only the code, not a live graph object) be reconstructed back
+# into a domain Journey. See app/services/journey_mapper.py.
+GRAPH_REGISTRY: dict[str, DependencyGraph] = {
+    "college_admission_scholarship": COLLEGE_ADMISSION_SCHOLARSHIP_GRAPH,
+    "start_small_business": START_SMALL_BUSINESS_GRAPH,
+}
+
+
+def get_graph(life_event_code: str) -> DependencyGraph:
+    try:
+        return GRAPH_REGISTRY[life_event_code]
+    except KeyError as exc:
+        raise ValueError(f"Unknown life_event_code: {life_event_code}") from exc

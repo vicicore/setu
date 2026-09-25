@@ -1,9 +1,17 @@
 from fastapi import APIRouter, HTTPException
 
 from app.core.config import get_settings
-from app.schemas.demo import DemoJourneyView, DemoStepView
-from app.services.demo_store import get_demo_session
-from app.services.orchestrator import OrchestrationError
+from app.core.container import get_journey_service, get_revenue_connector
+from app.schemas.demo import (
+    DemoAuditEntryView,
+    DemoCatalogService,
+    DemoCatalogView,
+    DemoJourneyView,
+    DemoStepView,
+)
+from app.services import demo_scenario
+from app.services.orchestrator import Journey, OrchestrationError
+from app.services.sla import compute_sla_status
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -13,21 +21,24 @@ def _require_demo_mode() -> None:
         raise HTTPException(status_code=404, detail="Demo mode is disabled")
 
 
-def _journey_view() -> DemoJourneyView:
-    session = get_demo_session()
-    journey = session.journey
-    steps = [
-        DemoStepView(
-            service_code=code,
-            display_name=journey.graph.display_name_of(code),
-            department=journey.graph.department_of(code),
-            status=step.status,
-            blocked_reason=step.blocked_reason,
-            external_reference=step.external_reference,
+def _journey_view(journey: Journey) -> DemoJourneyView:
+    steps = []
+    for code, step in journey.steps.items():
+        steps.append(
+            DemoStepView(
+                service_code=code,
+                display_name=journey.graph.display_name_of(code),
+                department=journey.graph.department_of(code),
+                status=step.status,
+                blocked_reason=step.blocked_reason,
+                external_reference=step.external_reference,
+                submitted_at=step.submitted_at,
+                sla_due_at=step.sla_due_at,
+                sla_status=compute_sla_status(step.sla_due_at, step.submitted_at),
+            )
         )
-        for code, step in journey.steps.items()
-    ]
     return DemoJourneyView(
+        application_id=journey.id,
         citizen_id=journey.citizen_id,
         steps=steps,
         timeline=journey.timeline,
@@ -35,41 +46,114 @@ def _journey_view() -> DemoJourneyView:
     )
 
 
+@router.get("/catalog", response_model=DemoCatalogView)
+def get_catalog() -> DemoCatalogView:
+    _require_demo_mode()
+    return DemoCatalogView(
+        life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
+        citizen_goal_statement_en=demo_scenario.CITIZEN_GOAL_STATEMENT_EN,
+        citizen_goal_statement_mr=demo_scenario.CITIZEN_GOAL_STATEMENT_MR,
+        services=[
+            DemoCatalogService(
+                service_code=s.service_code,
+                display_name=s.display_name,
+                department=s.department,
+                depends_on_service_code=s.depends_on_service_code,
+            )
+            for s in demo_scenario.catalog()
+        ],
+    )
+
+
 @router.get("/journey", response_model=DemoJourneyView)
 def get_journey() -> DemoJourneyView:
     _require_demo_mode()
-    return _journey_view()
+    service = get_journey_service()
+    journey = service.get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    if journey is None:
+        journey = service.start_or_reset_journey(
+            application_id=demo_scenario.DEMO_APPLICATION_ID,
+            citizen_id=demo_scenario.DEMO_CITIZEN_ID,
+            life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
+            graph=demo_scenario.DEMO_GRAPH,
+            already_verified_service_codes=set(demo_scenario.ALREADY_VERIFIED_ON_RESET),
+        )
+    return _journey_view(journey)
 
 
 @router.post("/reset", response_model=DemoJourneyView)
 def reset_demo() -> DemoJourneyView:
     _require_demo_mode()
-    get_demo_session().reset()
-    return _journey_view()
+    journey = get_journey_service().start_or_reset_journey(
+        application_id=demo_scenario.DEMO_APPLICATION_ID,
+        citizen_id=demo_scenario.DEMO_CITIZEN_ID,
+        life_event_code=demo_scenario.DEMO_LIFE_EVENT_CODE,
+        graph=demo_scenario.DEMO_GRAPH,
+        already_verified_service_codes=set(demo_scenario.ALREADY_VERIFIED_ON_RESET),
+    )
+    return _journey_view(journey)
 
 
 @router.post("/consent/income-certificate", response_model=DemoJourneyView)
 def grant_income_consent() -> DemoJourneyView:
     _require_demo_mode()
-    get_demo_session().grant_consent()
-    return _journey_view()
+    try:
+        journey = get_journey_service().grant_consent(
+            demo_scenario.DEMO_APPLICATION_ID,
+            "income_certificate",
+            purpose="Verify family income for engineering scholarship eligibility",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _journey_view(journey)
 
 
 @router.post("/actions/submit-income-certificate", response_model=DemoJourneyView)
 def submit_income_certificate() -> DemoJourneyView:
     _require_demo_mode()
     try:
-        get_demo_session().submit_income_certificate()
+        journey = get_journey_service().submit_to_connector(
+            demo_scenario.DEMO_APPLICATION_ID,
+            "income_certificate",
+            get_revenue_connector(),
+            payload={"citizen_id": demo_scenario.DEMO_CITIZEN_ID, "declared_income_inr": 185000},
+        )
     except OrchestrationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _journey_view()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _journey_view(journey)
 
 
 @router.post("/actions/approve-income-certificate", response_model=DemoJourneyView)
 def approve_income_certificate() -> DemoJourneyView:
     _require_demo_mode()
+    service = get_journey_service()
+    journey = service.get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    if journey is None:
+        raise HTTPException(status_code=404, detail="Demo journey not started yet")
+    step = journey.step("income_certificate")
+    if step.external_reference is None:
+        raise HTTPException(
+            status_code=409, detail="Income certificate has not been submitted yet"
+        )
+    get_revenue_connector().simulate_approval(step.external_reference)
     try:
-        get_demo_session().approve_income_certificate()
-    except (OrchestrationError, ValueError) as exc:
+        journey = service.receive_connector_event(
+            demo_scenario.DEMO_APPLICATION_ID, "income_certificate", event_status="approved"
+        )
+    except OrchestrationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _journey_view()
+    return _journey_view(journey)
+
+
+@router.get("/audit-log", response_model=list[DemoAuditEntryView])
+def get_audit_log() -> list[DemoAuditEntryView]:
+    _require_demo_mode()
+    entries = get_journey_service().audit_trail(demo_scenario.DEMO_APPLICATION_ID)
+    return [
+        DemoAuditEntryView(
+            id=e.id, actor=e.actor, action=e.action, metadata=e.metadata, created_at=e.created_at
+        )
+        for e in entries
+    ]

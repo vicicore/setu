@@ -33,6 +33,14 @@ class Settings(BaseSettings):
 
     demo_mode_enabled: bool = True
 
+    # Which concrete adapter backs each abstraction. "local" is a
+    # file-backed adapter with no external dependency, used for the SIH
+    # demo and local dev. "supabase"/"appwrite" are wired later without
+    # touching orchestration/business logic — see docs/DECISIONS.md.
+    persistence_backend: str = "local"
+    storage_backend: str = "local"
+    local_data_dir: str = "app/data"
+
 
 @lru_cache
 def get_settings() -> Settings:

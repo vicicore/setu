@@ -39,26 +39,48 @@ docker compose up -d
 ```
 
 Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
+Backend type check: `cd backend && ./venv/Scripts/python -m mypy`
 
-Status: Phase 1 (Foundation) is done — Next.js shell builds, FastAPI shell
-runs with a verified `/api/v1/health` endpoint. Phase 2 (orchestration core)
-has real, tested logic: a `JourneyOrchestrator` state machine, 4 mock
-department connectors (Revenue/Education/Social Justice/Labour) behind a
-common interface, the full Supabase schema + RLS (`backend/app/db/migrations/`,
-verified against a real Postgres container), and a working in-memory `/demo`
-API that reproduces the signature College Admission + Scholarship journey
-end to end — consent gating, connector submission, webhook approval, and
-the automatic scholarship unlock — with 6 passing backend tests. Supabase/
-Appwrite/n8n are wired for configuration but not yet connected to live
-projects (needs project owner to create those accounts). See
-`docs/DECISIONS.md` for choices made where the spec left implementation
-detail open, including one bug the tests caught and fixed.
+Status: Phase 1 (Foundation), Phase 2 (orchestration core + Supabase
+schema) and Phase 3 (repository/storage abstraction + a real `/demo`
+frontend) are done.
 
-Try it locally: `cd backend && ./venv/Scripts/python -m uvicorn app.main:app --reload`
-then `POST /api/v1/demo/reset`, `POST /api/v1/demo/consent/income-certificate`,
-`POST /api/v1/demo/actions/submit-income-certificate`,
-`POST /api/v1/demo/actions/approve-income-certificate`, `GET /api/v1/demo/journey`
-— watch `education_scholarship` go from `blocked` to `ready`.
+- **Orchestration** (`backend/app/services/orchestrator.py`): a real
+  `JourneyOrchestrator` state machine — consent gating, dependency checks,
+  webhook-driven cascading unlock. Untouched by the persistence work below.
+- **Persistence is behind interfaces, not scattered**: API -> `JourneyService`
+  -> `ApplicationRepository`/`AuditLogRepository` (ports) ->
+  `LocalJson*Repository` (today's adapter). Same shape for documents:
+  `DocumentStoragePort` -> `LocalDiskDocumentStorage`. Supabase/Appwrite
+  become new adapter classes later without touching orchestration or API code
+  — see `docs/DECISIONS.md`.
+  4 mock department connectors (Revenue/Education/Social Justice/Labour)
+  behind one common interface, and the full Supabase schema + RLS
+  (`backend/app/db/migrations/`, verified against a real Postgres container).
+- **A real, working `/demo` page** (`frontend/src/app/demo/page.tsx`) — not
+  a mockup: it calls the FastAPI backend live, renders the dependency graph,
+  lets you grant consent / submit / simulate approval, and shows the
+  scholarship auto-unlock, the unified timeline, and the audit trail.
+  Verified by actually clicking through it in a browser end to end.
+- 11 passing backend tests, `mypy` clean across 42 source files, frontend
+  build + lint clean.
+- Supabase/Appwrite/n8n are still only wired for configuration, not
+  connected to live projects — deliberately deferred; the abstraction
+  above exists so that's a later, isolated step.
+
+Try it locally:
+
+```bash
+cd backend && ./venv/Scripts/python -m uvicorn app.main:app --reload
+```
+
+```bash
+cd frontend && npm run dev
+```
+
+Then open `http://localhost:3000/demo` and click through: Reset demo ->
+Grant consent -> Submit Income Certificate -> Simulate Revenue approval —
+watch `education_scholarship` go from `blocked` to `ready` automatically.
 
 1. What we are building
 

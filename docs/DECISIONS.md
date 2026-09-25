@@ -60,12 +60,69 @@ and not re-litigated here.
   database matches the in-memory graph exactly. Container was torn down
   after verification — this was a one-off check, not a running service.
 
-## Open items for Phase 3+
+## Phase 3 — Repository abstraction, service layer, real /demo frontend
+
+- **Layering**: `app/api/v1/demo.py` (HTTP) -> `app/services/journey_service.py`
+  (orchestration + persistence coordination) -> `app/repositories/interfaces.py`
+  (ports) -> `app/repositories/local/*.py` (JSON-file adapter). The
+  `JourneyOrchestrator` itself (business logic — consent gating,
+  dependency resolution, cascading unlock) was **not** touched or
+  simplified; it still knows nothing about repositories or JSON files.
+  Swapping in Supabase later means writing `SupabaseApplicationRepository`
+  and `SupabaseAuditLogRepository` against the same
+  `app/repositories/interfaces.py` contracts and changing two branches in
+  `app/core/container.py` — no orchestrator or API code changes.
+- **Domain object vs. persisted record are different types on purpose**:
+  `Journey`/`JourneyStep`/`Consent` (dataclasses, carry a live
+  `DependencyGraph`) vs. `ApplicationRecord`/`StepRecord`/`ConsentRecord`
+  (Pydantic, JSON-serializable, store only `life_event_code`).
+  `app/services/journey_mapper.py` converts between them, resolving the
+  graph via a small registry (`app/services/dependency_graph.GRAPH_REGISTRY`)
+  keyed by the same life-event codes seeded in the database. A round-trip
+  test (`test_journey_mapper.py`) proves this loses no state.
+- **Connector instances stay process-wide singletons, not persisted**:
+  `RevenueMockConnector` holds its own request registry in memory
+  (`app/core/container.get_revenue_connector`). In production a connector
+  calls a real external department API per request and has no local
+  state to persist; the mock's in-memory registry is a demo-scope
+  stand-in for that, not a gap in the persistence layer. Restarting the
+  backend mid-journey (after submit, before approve) loses the
+  connector's ability to look up that specific request — acceptable for
+  a live demo (one continuous process) and called out here rather than
+  silently accepted.
+- **Audit trail is append-only across resets, deliberately**: `/demo/reset`
+  creates a fresh `journey.reset` audit entry but never clears prior
+  entries for that application id. An audit trail that a "reset" button
+  could erase would defeat its purpose; verified this by resetting mid-way
+  through a run in the browser and confirming the full history stayed.
+- **Static type checking**: added `mypy` (strict-ish config in
+  `pyproject.toml`: `disallow_untyped_defs`, `check_untyped_defs`,
+  `warn_return_any`). Runs clean across all 42 backend source files.
+- **A real bug caught by actually using the feature in a browser, not
+  just running pytest**: `JourneyOrchestrator.start_journey` appended
+  "Journey started for citizen X" to the timeline *after* calling
+  `_recompute_dependents`, so the rendered timeline showed
+  "education_scholarship -> blocked" before "Journey started" —
+  contradicting its own narrative. Existing tests didn't catch this
+  because none asserted timeline *order*, only membership. Fixed by
+  moving the append before the recompute call, and added a regression
+  assertion (`test_signature_demo_end_to_end`, item 1b) plus verified the
+  fix live via the browser tool against the running frontend + backend.
+- **Test isolation for file-backed repositories**: added an autouse
+  pytest fixture (`app/tests/conftest.py`) that points `LOCAL_DATA_DIR`
+  at a fresh `tmp_path` and clears every `container.py` `lru_cache` per
+  test — without it, tests would read/write the same JSON files and
+  leak state into each other.
+
+## Open items for Phase 4+
 
 - Supabase project must be created (cloud, free tier) and the migrations
   above applied to it; Appwrite project needed for real document
   storage. Both need account creation, which requires the project owner
-  — not something to be done unattended.
+  — not something to be done unattended. Per direction received during
+  Phase 3, this is intentionally deferred — the repository/storage
+  abstraction exists specifically so this can happen later without
+  touching orchestration or business logic.
 - Connector interface (`app/services/connectors/base.py`) currently
   supports Revenue/Education/Social Justice/Labour mocks with only
   `submit`/`get_status`/`simulate_approval`/`simulate_rejection`/

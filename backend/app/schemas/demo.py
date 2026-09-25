@@ -1,6 +1,22 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
-from app.schemas.enums import ApplicationStepStatus
+from app.schemas.enums import ApplicationStepStatus, SlaStatus
+
+
+class DemoCatalogService(BaseModel):
+    service_code: str
+    display_name: str
+    department: str
+    depends_on_service_code: str | None
+
+
+class DemoCatalogView(BaseModel):
+    life_event_code: str
+    citizen_goal_statement_en: str
+    citizen_goal_statement_mr: str
+    services: list[DemoCatalogService]
 
 
 class DemoStepView(BaseModel):
@@ -10,10 +26,22 @@ class DemoStepView(BaseModel):
     status: ApplicationStepStatus
     blocked_reason: str | None
     external_reference: str | None
+    submitted_at: datetime | None
+    sla_due_at: datetime | None
+    sla_status: SlaStatus | None
 
 
 class DemoJourneyView(BaseModel):
+    application_id: str
     citizen_id: str
     steps: list[DemoStepView]
     timeline: list[str]
     is_complete: bool
+
+
+class DemoAuditEntryView(BaseModel):
+    id: str
+    actor: str
+    action: str
+    metadata: dict
+    created_at: datetime
