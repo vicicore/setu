@@ -1,0 +1,83 @@
+{
+  "id": "setu-sla-monitoring",
+  "name": "SETU - SLA Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
+      },
+      "id": "2a2b2c2d-0001-4000-8000-000000000001",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-460, 260]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SETU_API_BASE_URL }}/demo/sla-alerts",
+        "options": {}
+      },
+      "id": "2a2b2c2d-0002-4000-8000-000000000002",
+      "name": "Fetch At-Risk / Breached Steps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-220, 260],
+      "notes": "Demo scope polls the single demo application's SLA state; a production version would poll GET /admin/sla across all applications."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "cond-has-alerts",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a2b2c2d-0003-4000-8000-000000000003",
+      "name": "Any SLA Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [20, 260]
+    },
+    {
+      "parameters": {},
+      "id": "2a2b2c2d-0004-4000-8000-000000000004",
+      "name": "Notify Officials (log)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [260, 160],
+      "notes": "Stands in for a real notification channel (email/Slack) — out of scope for the SIH prototype per the Master Prompt's 'do not build unnecessary complexity' guidance. Wiring a real channel here does not require touching the backend."
+    },
+    {
+      "parameters": {},
+      "id": "2a2b2c2d-0005-4000-8000-000000000005",
+      "name": "All Clear",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [260, 360]
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{ "node": "Fetch At-Risk / Breached Steps", "type": "main", "index": 0 }]]
+    },
+    "Fetch At-Risk / Breached Steps": {
+      "main": [[{ "node": "Any SLA Alerts?", "type": "main", "index": 0 }]]
+    },
+    "Any SLA Alerts?": {
+      "main": [
+        [{ "node": "Notify Officials (log)", "type": "main", "index": 0 }],
+        [{ "node": "All Clear", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

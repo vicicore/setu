@@ -42,31 +42,39 @@ Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
 Backend type check: `cd backend && ./venv/Scripts/python -m mypy`
 
 Status: Phase 1 (Foundation), Phase 2 (orchestration core + Supabase
-schema) and Phase 3 (repository/storage abstraction + a real `/demo`
-frontend) are done.
+schema), Phase 3 (repository/storage abstraction + a real `/demo`
+frontend) and Phase 4 (webhook boundary, n8n workflows, eligibility
+engine, citizen profile/vault) are done.
 
 - **Orchestration** (`backend/app/services/orchestrator.py`): a real
   `JourneyOrchestrator` state machine — consent gating, dependency checks,
-  webhook-driven cascading unlock. Untouched by the persistence work below.
-- **Persistence is behind interfaces, not scattered**: API -> `JourneyService`
-  -> `ApplicationRepository`/`AuditLogRepository` (ports) ->
-  `LocalJson*Repository` (today's adapter). Same shape for documents:
-  `DocumentStoragePort` -> `LocalDiskDocumentStorage`. Supabase/Appwrite
-  become new adapter classes later without touching orchestration or API code
-  — see `docs/DECISIONS.md`.
-  4 mock department connectors (Revenue/Education/Social Justice/Labour)
+  webhook-driven cascading unlock. Untouched by every layer built on top of it.
+- **Persistence is behind interfaces, not scattered**: API -> service layer
+  (`JourneyService`, `CitizenProfileService`, `DocumentVaultService`) ->
+  repository/storage ports -> `LocalJson*`/`LocalDisk*` adapters. Supabase/
+  Appwrite become new adapter classes later without touching orchestration
+  or API code — see `docs/DECISIONS.md`.
+- **One event-processing path for connector status changes, not two**:
+  `POST /api/v1/webhooks/n8n/{event}` and the `/demo` approve action both
+  resolve to the same `JourneyService.receive_connector_event` call.
+- **2 n8n workflows** (`infra/n8n/workflows/`), verified by actually
+  importing them into a disposable n8n instance and exporting them back
+  out intact — not just hand-written JSON.
+- **Eligibility engine** (`POST /api/v1/eligibility/evaluate`): deterministic
+  rules over the dependency graph, every result comes with a plain-language
+  reason — no LLM in the eligibility decision path.
+- **Citizen profile + document vault** (`/api/v1/citizens/{id}/profile`,
+  `/api/v1/citizens/{id}/documents`) on the local adapters, enforcing the
+  5MB/MIME-allowlist upload rules already, not deferred until Appwrite exists.
+- 4 mock department connectors (Revenue/Education/Social Justice/Labour)
   behind one common interface, and the full Supabase schema + RLS
   (`backend/app/db/migrations/`, verified against a real Postgres container).
-- **A real, working `/demo` page** (`frontend/src/app/demo/page.tsx`) — not
-  a mockup: it calls the FastAPI backend live, renders the dependency graph,
-  lets you grant consent / submit / simulate approval, and shows the
-  scholarship auto-unlock, the unified timeline, and the audit trail.
-  Verified by actually clicking through it in a browser end to end.
-- 11 passing backend tests, `mypy` clean across 42 source files, frontend
-  build + lint clean.
-- Supabase/Appwrite/n8n are still only wired for configuration, not
-  connected to live projects — deliberately deferred; the abstraction
-  above exists so that's a later, isolated step.
+- 26 passing backend tests, `mypy` clean across 53 source files, frontend
+  build + lint clean, full demo flow re-verified live in a browser after
+  every phase.
+- Supabase/Appwrite are still only wired for configuration, not connected
+  to live projects — deliberately deferred; the abstraction above exists
+  so that's a later, isolated step.
 
 Try it locally:
 

@@ -103,8 +103,17 @@ class JourneyService:
         return journey
 
     def receive_connector_event(
-        self, application_id: str, service_code: str, event_status: str
+        self,
+        application_id: str,
+        service_code: str,
+        event_status: str,
+        source: str = "demo_action",
     ) -> Journey:
+        """The single event-processing path for a connector status
+        change, regardless of who triggered it: the deterministic /demo
+        approve action and the generic n8n webhook both end up here.
+        There is no second orchestration implementation for webhooks —
+        see receive_external_event below, and docs/DECISIONS.md."""
         record = self._require_record(application_id)
         journey = to_domain(record)
         changed = self._orchestrator.receive_connector_event(journey, service_code, event_status)
@@ -114,10 +123,26 @@ class JourneyService:
             metadata={
                 "service_code": service_code,
                 "event_status": event_status,
+                "source": source,
                 "cascaded_to": [c for c in changed if c != service_code],
             },
         )
         return journey
+
+    def receive_external_event(
+        self, external_reference: str, event_status: str, source_event: str
+    ) -> Journey:
+        """Entry point for the generic webhook boundary
+        (POST /webhooks/n8n/{event}): resolves which application/step a
+        bare external_reference belongs to, then calls the exact same
+        receive_connector_event used everywhere else."""
+        found = self._applications.find_by_step_external_reference(external_reference)
+        if found is None:
+            raise ValueError(f"No step found with external_reference {external_reference!r}")
+        record, service_code = found
+        return self.receive_connector_event(
+            record.id, service_code, event_status, source=f"n8n_webhook:{source_event}"
+        )
 
     def audit_trail(self, application_id: str) -> list[AuditLogEntry]:
         return self._audit.list_for_application(application_id)

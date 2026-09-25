@@ -1,0 +1,112 @@
+{
+  "id": "setu-connector-status-webhook",
+  "name": "SETU - Connector Status to Journey Update",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "connector-status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0001-4000-8000-000000000001",
+      "name": "Department Status Event (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-460, 260],
+      "webhookId": "setu-connector-status"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SETU_API_BASE_URL }}/webhooks/n8n/{{ $json.body.event }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-setu-webhook-secret",
+              "value": "={{ $env.SETU_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"external_reference\": $json.body.external_reference, \"service_code\": $json.body.service_code, \"status\": $json.body.status, \"department\": $json.body.department } }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0002-4000-8000-000000000002",
+      "name": "Deliver to SETU Webhook Boundary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-220, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "cond-accepted",
+              "leftValue": "={{ $json.accepted_status }}",
+              "rightValue": "ignored",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0003-4000-8000-000000000003",
+      "name": "Did it change journey state?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [20, 260]
+    },
+    {
+      "parameters": {},
+      "id": "1a1b1c1d-0004-4000-8000-000000000004",
+      "name": "Journey/Dependency Updated (log)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [260, 160],
+      "notes": "SETU already recomputed dependencies and cascaded any downstream unlock synchronously inside the webhook call — that re-evaluation is atomic with the state write, so it is not a separate n8n step. This node is the point where a real deployment would trigger a citizen notification (SMS/email/push)."
+    },
+    {
+      "parameters": {},
+      "id": "1a1b1c1d-0005-4000-8000-000000000005",
+      "name": "No State Change (ignored status)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [260, 360]
+    },
+    {
+      "parameters": { "respondWith": "allIncomingItems", "options": {} },
+      "id": "1a1b1c1d-0006-4000-8000-000000000006",
+      "name": "Respond to Department System",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [500, 260]
+    }
+  ],
+  "connections": {
+    "Department Status Event (Webhook)": {
+      "main": [[{ "node": "Deliver to SETU Webhook Boundary", "type": "main", "index": 0 }]]
+    },
+    "Deliver to SETU Webhook Boundary": {
+      "main": [[{ "node": "Did it change journey state?", "type": "main", "index": 0 }]]
+    },
+    "Did it change journey state?": {
+      "main": [
+        [{ "node": "Journey/Dependency Updated (log)", "type": "main", "index": 0 }],
+        [{ "node": "No State Change (ignored status)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Journey/Dependency Updated (log)": {
+      "main": [[{ "node": "Respond to Department System", "type": "main", "index": 0 }]]
+    },
+    "No State Change (ignored status)": {
+      "main": [[{ "node": "Respond to Department System", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

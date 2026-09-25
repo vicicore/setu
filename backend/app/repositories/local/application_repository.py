@@ -53,3 +53,12 @@ class LocalJsonApplicationRepository(ApplicationRepository):
     def list_all(self) -> list[ApplicationRecord]:
         data = self._store.read() or {}
         return [ApplicationRecord.model_validate(raw) for raw in data.values()]
+
+    def find_by_step_external_reference(
+        self, external_reference: str
+    ) -> tuple[ApplicationRecord, str] | None:
+        for record in self.list_all():
+            for service_code, step in record.steps.items():
+                if step.external_reference == external_reference:
+                    return record, service_code
+        return None

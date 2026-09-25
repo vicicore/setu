@@ -114,20 +114,87 @@ and not re-litigated here.
   test — without it, tests would read/write the same JSON files and
   leak state into each other.
 
-## Open items for Phase 4+
+## Phase 4 — Generic webhook boundary, n8n workflows, eligibility, profile/vault
+
+- **One event-processing path, not two**: `POST /api/v1/webhooks/n8n/{event}`
+  (`app/api/v1/webhooks.py`) resolves a bare `external_reference` back to
+  its `(application_id, service_code)` via a new repository method
+  (`ApplicationRepository.find_by_step_external_reference`), then calls
+  the exact same `JourneyService.receive_connector_event` the `/demo`
+  approve action calls. The only new parameter is `source`, used purely
+  for audit-trail labeling (`"demo_action"` vs.
+  `"n8n_webhook:<event>"`) — no orchestration behavior branches on it.
+  Proved by `test_webhooks.py::test_webhook_approval_unlocks_scholarship_same_as_demo_action`.
+- **Webhook auth**: a shared-secret header (`x-setu-webhook-secret`),
+  checked only when `N8N_WEBHOOK_SECRET` is configured — local dev with
+  no secret set stays open, matching the existing `.env.example` default.
+  This is a shared-secret, not a signed payload; upgrading to HMAC
+  signature verification is a reasonable later hardening step once a
+  real department/n8n integration exists, not needed for the mock
+  connectors driving the demo.
+- **Non-terminal statuses are acknowledged, not applied**: only
+  `"approved"`/`"rejected"` drive a state transition; anything else
+  (e.g. `"submitted"`) returns `accepted_status: "ignored"` and touches
+  no state. Prevents an intermediate department-system status update
+  from being misread as a final outcome.
+- **n8n workflows verified against a real, disposable n8n instance**, not
+  just written by hand: `docker compose up`, `n8n import:workflow` on
+  both JSON files (each needed a top-level `id` field the CLI importer
+  requires — added), `n8n list:workflow` confirmed both registered, and
+  `n8n export:workflow` round-tripped one back out with every node
+  intact. Container + volume torn down after. Only 2 workflows, not one
+  per bullet in the spec's requirement list — dependency re-evaluation is
+  intentionally *not* a separate n8n step (see below), and a fourth
+  "notification" workflow would have been a no-op node with nothing to
+  connect it to, so its logic is folded into the two real workflows
+  instead of padding the count.
+- **Dependency re-evaluation stays inside the backend webhook call,
+  not a separate n8n node**: splitting it into its own async n8n step
+  would let a client read a state where the connector step is "approved"
+  but dependents haven't yet been recomputed — a real inconsistent-read
+  window. Keeping it atomic with the state write costs nothing (it's a
+  fast in-process call) and removes an entire class of race condition.
+- **Eligibility engine is a pure function, not a Journey method**:
+  `app/services/eligibility.py:evaluate(life_event_code, graph,
+  verified_service_codes)` mirrors the same dependency-blocking logic
+  `JourneyOrchestrator._recompute_dependents` uses, but deliberately
+  doesn't call into the orchestrator — eligibility is checked *before*
+  any Application/Consent exists, so there's no Journey object for it to
+  operate on yet. `EligibilityEvaluateRequest` takes an explicit
+  `verified_service_codes: list[str]` rather than a citizen_id looked up
+  against a live profile store, because that store doesn't exist yet
+  (see below) — wiring eligibility to the vault is later work.
+- **Citizen profile + document vault use opaque string citizen_ids**,
+  not UUIDs, consistent with every other identifier in the app so far
+  (`demo-citizen-priya-deshmukh` etc.) — there's no Supabase Auth issuing
+  real UUIDs yet. `CitizenProfileView`/`DocumentView` will need a pass
+  when real auth arrives, but the repository/service shape underneath
+  won't change.
+- **Vault upload enforces the security spec's MIME allow-list and 5MB
+  limit today**, via `LocalDiskDocumentStorage` (already built in Phase
+  3) — not deferred until Appwrite exists. Tested with an oversized file
+  and a disallowed MIME type, both rejected with 422.
+- **Profile and vault are not yet wired to eligibility or the journey
+  orchestrator** — `verified_service_codes` for eligibility is still
+  caller-supplied. Connecting "does this citizen's vault contain a
+  verified income certificate" to the eligibility engine and to
+  `start_or_reset_journey`'s `already_verified_service_codes` is the
+  natural next step once there's a reason to (e.g. a non-demo journey).
+
+## Open items for Phase 5+
 
 - Supabase project must be created (cloud, free tier) and the migrations
-  above applied to it; Appwrite project needed for real document
-  storage. Both need account creation, which requires the project owner
-  — not something to be done unattended. Per direction received during
-  Phase 3, this is intentionally deferred — the repository/storage
-  abstraction exists specifically so this can happen later without
-  touching orchestration or business logic.
-- Connector interface (`app/services/connectors/base.py`) currently
-  supports Revenue/Education/Social Justice/Labour mocks with only
-  `submit`/`get_status`/`simulate_approval`/`simulate_rejection`/
-  `emit_webhook_event`. The actual `/webhooks/n8n/{event}` HTTP endpoint
-  and n8n workflow JSON exports are not yet built.
-- Eligibility engine (`GET/POST /eligibility/evaluate`) and citizen
-  profile/vault/consent REST endpoints backed by Supabase are not yet
-  built — only the in-memory demo path is wired end to end so far.
+  applied to it; Appwrite project needed for real document storage. Both
+  need account creation, which requires the project owner — not
+  something to be done unattended. The repository/storage abstraction
+  exists specifically so this can happen later without touching
+  orchestration or business logic.
+- Eligibility and the citizen vault are not yet connected to each other
+  or to the journey orchestrator (see above).
+- No admin/operations dashboard yet (bottleneck visibility, SLA breach
+  counts across all applications — today's `/demo/sla-alerts` only
+  covers the single demo application).
+- No i18n on the actual UI (the demo page shows Marathi + English as
+  static text, not a language switcher).
+- Connector state (Phase 3 limitation) still doesn't survive a backend
+  restart mid-journey.

@@ -8,10 +8,19 @@ factories needs to change."""
 from functools import lru_cache
 
 from app.core.config import get_settings
-from app.repositories.interfaces import ApplicationRepository, AuditLogRepository
+from app.repositories.interfaces import (
+    ApplicationRepository,
+    AuditLogRepository,
+    CitizenRepository,
+    DocumentRepository,
+)
 from app.repositories.local.application_repository import LocalJsonApplicationRepository
 from app.repositories.local.audit_log_repository import LocalJsonAuditLogRepository
+from app.repositories.local.citizen_repository import LocalJsonCitizenRepository
+from app.repositories.local.document_repository import LocalJsonDocumentRepository
 from app.services.connectors.revenue import RevenueMockConnector
+from app.services.document_service import DocumentVaultService
+from app.services.citizen_service import CitizenProfileService
 from app.services.journey_service import JourneyService
 from app.services.orchestrator import JourneyOrchestrator
 from app.storage.interfaces import DocumentStoragePort
@@ -65,3 +74,33 @@ def get_journey_service() -> JourneyService:
         application_repo=get_application_repository(),
         audit_repo=get_audit_log_repository(),
     )
+
+
+@lru_cache
+def get_citizen_repository() -> CitizenRepository:
+    settings = get_settings()
+    if settings.persistence_backend == "local":
+        return LocalJsonCitizenRepository()
+    raise NotImplementedError(
+        f"persistence_backend={settings.persistence_backend!r} has no citizen repository wired yet"
+    )
+
+
+@lru_cache
+def get_document_repository() -> DocumentRepository:
+    settings = get_settings()
+    if settings.persistence_backend == "local":
+        return LocalJsonDocumentRepository()
+    raise NotImplementedError(
+        f"persistence_backend={settings.persistence_backend!r} has no document repository wired yet"
+    )
+
+
+@lru_cache
+def get_citizen_profile_service() -> CitizenProfileService:
+    return CitizenProfileService(get_citizen_repository())
+
+
+@lru_cache
+def get_document_vault_service() -> DocumentVaultService:
+    return DocumentVaultService(get_document_repository(), get_document_storage())

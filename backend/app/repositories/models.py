@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.schemas.enums import ApplicationStepStatus
+from app.schemas.enums import ApplicationStepStatus, DocumentStatus
 
 
 class StepRecord(BaseModel):
@@ -41,6 +41,32 @@ class ApplicationRecord(BaseModel):
     timeline: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class CitizenProfileRecord(BaseModel):
+    citizen_id: str
+    full_name: str
+    dob: str | None = None
+    district: str | None = None
+    taluka: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    preferred_language: str = "en"
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentRecord(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    citizen_id: str
+    doc_type: str
+    issuer: str | None = None
+    storage_key: str
+    original_filename: str
+    mime_type: str
+    size_bytes: int
+    status: DocumentStatus = DocumentStatus.PENDING
+    created_at: datetime
 
 
 class AuditLogEntry(BaseModel):

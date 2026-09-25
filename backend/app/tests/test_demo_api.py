@@ -79,3 +79,12 @@ def test_demo_full_flow_unlocks_scholarship_via_http_and_persists() -> None:
     ]
     cascade_entry = next(e for e in audit_log if e["action"] == "connector.event_received")
     assert "education_scholarship" in cascade_entry["metadata"]["cascaded_to"]
+
+
+def test_sla_alerts_empty_on_a_freshly_reset_journey() -> None:
+    client.post("/api/v1/demo/reset")
+    response = client.get("/api/v1/demo/sla-alerts")
+    assert response.status_code == 200
+    # Nothing has been submitted to a connector yet, so nothing has an
+    # SLA clock running.
+    assert response.json() == []

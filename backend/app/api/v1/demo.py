@@ -147,6 +147,19 @@ def approve_income_certificate() -> DemoJourneyView:
     return _journey_view(journey)
 
 
+@router.get("/sla-alerts", response_model=list[DemoStepView])
+def get_sla_alerts() -> list[DemoStepView]:
+    """Polled by the sla-monitoring n8n workflow (infra/n8n/workflows/) —
+    returns only steps whose SLA is at_risk or breached, computed live
+    from the same `compute_sla_status` the journey view uses."""
+    _require_demo_mode()
+    journey = get_journey_service().get_journey(demo_scenario.DEMO_APPLICATION_ID)
+    if journey is None:
+        return []
+    view = _journey_view(journey)
+    return [s for s in view.steps if s.sla_status in ("at_risk", "breached")]
+
+
 @router.get("/audit-log", response_model=list[DemoAuditEntryView])
 def get_audit_log() -> list[DemoAuditEntryView]:
     _require_demo_mode()

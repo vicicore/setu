@@ -6,7 +6,12 @@ above this line changes."""
 
 from abc import ABC, abstractmethod
 
-from app.repositories.models import ApplicationRecord, AuditLogEntry
+from app.repositories.models import (
+    ApplicationRecord,
+    AuditLogEntry,
+    CitizenProfileRecord,
+    DocumentRecord,
+)
 
 
 class ApplicationRepository(ABC):
@@ -28,6 +33,17 @@ class ApplicationRepository(ABC):
     @abstractmethod
     def list_all(self) -> list[ApplicationRecord]: ...
 
+    @abstractmethod
+    def find_by_step_external_reference(
+        self, external_reference: str
+    ) -> tuple[ApplicationRecord, str] | None:
+        """Returns (record, service_code) for the step carrying this
+        connector external_reference, or None. This is how a webhook —
+        which only knows the reference a connector handed out — is
+        routed back to the right application/step without the caller
+        needing to know the application id up front."""
+        ...
+
 
 class AuditLogRepository(ABC):
     @abstractmethod
@@ -38,3 +54,25 @@ class AuditLogRepository(ABC):
 
     @abstractmethod
     def list_all(self, limit: int = 100) -> list[AuditLogEntry]: ...
+
+
+class CitizenRepository(ABC):
+    @abstractmethod
+    def get(self, citizen_id: str) -> CitizenProfileRecord | None: ...
+
+    @abstractmethod
+    def upsert(self, record: CitizenProfileRecord) -> CitizenProfileRecord: ...
+
+
+class DocumentRepository(ABC):
+    @abstractmethod
+    def create(self, record: DocumentRecord) -> DocumentRecord: ...
+
+    @abstractmethod
+    def get(self, document_id: str) -> DocumentRecord | None: ...
+
+    @abstractmethod
+    def list_for_citizen(self, citizen_id: str) -> list[DocumentRecord]: ...
+
+    @abstractmethod
+    def delete(self, document_id: str) -> None: ...
