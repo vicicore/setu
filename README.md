@@ -41,54 +41,46 @@ docker compose up -d
 Backend tests: `cd backend && ./venv/Scripts/python -m pytest`
 Backend type check: `cd backend && ./venv/Scripts/python -m mypy`
 
-Status: Phases 1-4 (foundation, orchestration core + Supabase schema,
-repository/storage abstraction, webhook boundary/n8n/eligibility/vault)
-and Phase 5 (system integration — profile, vault, eligibility and the
-orchestrator working as one connected system) are done.
+Status: Phases 1-5 (foundation through system integration) and Phase 6
+(productization — a real citizen-facing product shell, journey detail
+page, consent UX, admin dashboard, a second real journey, i18n, and a
+judge-mode `/demo`) are done.
 
 - **Orchestration** (`backend/app/services/orchestrator.py`): a real
   `JourneyOrchestrator` state machine — consent gating, multi-requirement
-  dependency checks, webhook-driven cascading unlock. Untouched by every
-  layer built on top of it, including this phase's integration work.
-- **Persistence is behind interfaces, not scattered**: API -> service layer
-  (`JourneyService`, `CitizenProfileService`, `DocumentVaultService`) ->
-  repository/storage ports -> `LocalJson*`/`LocalDisk*` adapters. Supabase/
-  Appwrite become new adapter classes later without touching orchestration
-  or API code — see `docs/DECISIONS.md`.
-- **One event-processing path for a service becoming verified, from
-  anywhere**: a connector webhook, the `/demo` approve action, and a vault
-  document verification (`DocumentVaultService.verify` +
-  `JourneyService.sync_verified_document`) all resolve to the exact same
+  dependency checks, webhook-driven cascading unlock. Untouched through
+  every phase built on top of it, including this one.
+- **7 product routes sharing one nav and one design language**: `/`,
+  `/services` (real life-event catalog), `/journeys` + `/journeys/[id]`
+  (the richest page — progress, current blocker, next action, per-step
+  consent/SLA, all computed server-side), `/vault` (real
+  upload→review→verify/reject lifecycle, cross-referenced against which
+  journeys use each document), `/profile`, plus `/admin` and the
+  judge-mode `/demo` — not dozens of disconnected screens.
+- **A second real journey**: Starting a Small Business, built entirely on
+  a new *generic* `/journeys` API (not a copy of the College Admission
+  demo) — proving the orchestrator is a reusable platform. Exercises
+  three different mock connectors (Labour, Urban Development, Finance)
+  end to end.
+- **One event-processing path for a service becoming verified or
+  rejected, from anywhere**: a connector webhook, a demo action, or a
+  vault document transition all resolve to the exact same
   `JourneyService.receive_connector_event` call. No parallel state machine.
-- **No caller-supplied eligibility state for the normal flow**:
-  `GET /citizens/{id}/eligibility/{life_event_code}` derives the verified
-  set from the citizen's actual vault documents *and* any already-verified
-  step in their applications — so it doesn't go stale the moment a
-  connector approval lands mid-journey (a real bug this phase's browser
-  testing caught and fixed).
-- **Service requirements are explicit, multi-value data** — `education_scholarship`
-  now genuinely requires identity + domicile + income all verified
-  (`ServiceRequirement.requires: list[str]`), not a single artificial edge.
-- **Document lifecycle is real**: `UPLOADED -> UNDER_REVIEW -> VERIFIED / REJECTED`,
-  each transition persisted and rejected if called out of order.
-- **2 n8n workflows** (`infra/n8n/workflows/`), verified by actually
-  importing them into a disposable n8n instance and exporting them back
-  out intact — not just hand-written JSON.
-- **`/admin/metrics`**: real numbers (bottlenecks, department pending/rejected
-  counts, SLA at-risk/breached, blocked journeys) computed by walking actual
-  application state — groundwork for the eventual dashboard, no dashboard UI yet.
-- **A real, professional home page** (`/`) plus a significantly expanded
-  `/demo` that now shows the citizen's profile, vault, eligibility (with
-  plain-language reasons), dependency graph, connector/webhook status,
-  unified timeline and audit trail as one coherent journey — 2 pages, not
-  dozens.
-- 33 passing backend tests, `mypy` clean across 58 source files, frontend
-  build + lint clean, full demo flow (including the new vault-verification
-  path) re-verified live in a browser — twice, catching 2 real bugs in the
-  process (see `docs/DECISIONS.md`).
+- **`/admin` dashboard** on real, previously-built `/admin/metrics` data —
+  bottleneck services ("where are citizens stuck"), department workload,
+  blocked journeys. No fabricated numbers.
+- **i18n foundation** (English/Marathi) covering nav, home, and common
+  status/action labels — a centralized dictionary, not scattered strings.
+- 39 passing backend tests, `mypy` clean across 66 source files, frontend
+  build + lint clean, extensive live browser verification across every
+  new page — which caught and fixed 4 real bugs this phase (a dark-mode
+  CSS contrast break, a missing mock connector, and a UI/backend gating
+  bug that silently blocked consent on an unlocked step). Full detail in
+  `docs/DECISIONS.md`.
 - Supabase/Appwrite are still only wired for configuration, not connected
-  to live projects — deliberately deferred; the abstraction above exists
-  so that's a later, isolated step.
+  to live projects — deliberately deferred; the repository/storage
+  abstraction exists so that's a later, isolated step. Nothing in Phase 6
+  required it.
 
 Try it locally:
 
@@ -100,9 +92,13 @@ cd backend && ./venv/Scripts/python -m uvicorn app.main:app --reload
 cd frontend && npm run dev
 ```
 
-Then open `http://localhost:3000/demo` and click through: Reset demo ->
-Grant consent -> Submit Income Certificate -> Simulate Revenue approval —
-watch `education_scholarship` go from `blocked` to `ready` automatically.
+Then open `http://localhost:3000` for the full product (Home, Discover
+Services, My Journeys, Documents, Profile), or go straight to
+`http://localhost:3000/demo` for judge mode and click through: Reset demo
+-> Grant consent -> Submit Income Certificate -> Simulate Revenue approval
+— watch `education_scholarship` go from `blocked` to `ready`
+automatically. A second scenario tab in `/demo` runs the same flow for
+Starting a Small Business through three different mock connectors.
 
 1. What we are building
 

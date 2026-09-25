@@ -80,6 +80,17 @@ class JourneyService:
         )
         return journey
 
+    def revoke_consent(self, application_id: str, service_code: str) -> Journey:
+        record = self._require_record(application_id)
+        journey = to_domain(record)
+        self._orchestrator.revoke_consent(journey, service_code)
+        self._applications.save(to_record(journey, created_at=record.created_at))
+        self._audit_event(
+            application_id, actor="citizen", action="consent.revoked",
+            metadata={"service_code": service_code},
+        )
+        return journey
+
     def submit_to_connector(
         self,
         application_id: str,
@@ -164,6 +175,26 @@ class JourneyService:
             updated_journeys.append(
                 self.receive_connector_event(
                     record.id, service_code, event_status="approved", source="vault_verification"
+                )
+            )
+        return updated_journeys
+
+    def sync_rejected_document(self, citizen_id: str, service_code: str) -> list[Journey]:
+        """Mirror of sync_verified_document: a rejected vault document
+        should make any waiting journey step REJECTED too (via the same
+        receive_connector_event path), so the requirement visibly
+        remains unsatisfied and the citizen's next_action text says so —
+        not silently ignored."""
+        updated_journeys = []
+        for record in self._applications.list_for_citizen(citizen_id):
+            step = record.steps.get(service_code)
+            if step is None:
+                continue
+            if step.status not in (ApplicationStepStatus.NOT_STARTED, ApplicationStepStatus.BLOCKED):
+                continue
+            updated_journeys.append(
+                self.receive_connector_event(
+                    record.id, service_code, event_status="rejected", source="vault_rejection"
                 )
             )
         return updated_journeys

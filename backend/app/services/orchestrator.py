@@ -132,7 +132,12 @@ class JourneyOrchestrator:
         payload: dict,
     ) -> str:
         step = journey.step(service_code)
-        if step.status not in (ApplicationStepStatus.NOT_STARTED, ApplicationStepStatus.BLOCKED):
+        submittable_statuses = (
+            ApplicationStepStatus.NOT_STARTED,
+            ApplicationStepStatus.BLOCKED,
+            ApplicationStepStatus.READY,
+        )
+        if step.status not in submittable_statuses:
             raise OrchestrationError(
                 f"{service_code} is not in a submittable state (currently {step.status})"
             )

@@ -12,12 +12,12 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* The product's pages (nav, cards, status badges) are designed for a
+   single light theme only — none implement a dark: variant. Following
+   the OS/browser's prefers-color-scheme here would silently invert the
+   background without inverting any page's text colors, breaking
+   contrast everywhere (found via live browser testing, not a code
+   review). Lock to light until dark mode is deliberately supported. */
 
 body {
   background: var(--background);

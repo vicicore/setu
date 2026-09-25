@@ -18,7 +18,14 @@ from app.repositories.local.application_repository import LocalJsonApplicationRe
 from app.repositories.local.audit_log_repository import LocalJsonAuditLogRepository
 from app.repositories.local.citizen_repository import LocalJsonCitizenRepository
 from app.repositories.local.document_repository import LocalJsonDocumentRepository
+from app.services.connectors.base import GovernmentConnector
+from app.services.connectors.education import EducationMockConnector
+from app.services.connectors.finance import FinanceMockConnector
+from app.services.connectors.home_affairs import HomeAffairsMockConnector
+from app.services.connectors.labour import LabourMockConnector
 from app.services.connectors.revenue import RevenueMockConnector
+from app.services.connectors.social_justice import SocialJusticeMockConnector
+from app.services.connectors.urban_development import UrbanDevelopmentMockConnector
 from app.services.document_service import DocumentVaultService
 from app.services.citizen_service import CitizenProfileService
 from app.services.journey_service import JourneyService
@@ -65,6 +72,31 @@ def get_revenue_connector() -> RevenueMockConnector:
     a submit created earlier — this is a demo-scope simplification, not
     a persistence guarantee; see docs/DECISIONS.md."""
     return RevenueMockConnector()
+
+
+@lru_cache
+def _connector_registry() -> dict[str, GovernmentConnector]:
+    return {
+        "Revenue": get_revenue_connector(),
+        "Higher Education": EducationMockConnector(),
+        "Social Justice": SocialJusticeMockConnector(),
+        "Labour": LabourMockConnector(),
+        "Urban Development": UrbanDevelopmentMockConnector(),
+        "Finance": FinanceMockConnector(),
+        "Home": HomeAffairsMockConnector(),
+    }
+
+
+def get_connector_for_department(department: str) -> GovernmentConnector:
+    """Generic resolution used by the non-demo journeys API, so a second
+    life event (or a third) never needs orchestrator or API changes —
+    only a department -> connector mapping entry here. The /demo route's
+    hardcoded get_revenue_connector() above is untouched on purpose: it
+    backs the already-approved, deterministic College Admission flow."""
+    try:
+        return _connector_registry()[department]
+    except KeyError as exc:
+        raise ValueError(f"No connector registered for department {department!r}") from exc
 
 
 @lru_cache

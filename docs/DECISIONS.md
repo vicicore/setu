@@ -265,22 +265,171 @@ and not re-litigated here.
   Fixed by sequencing: `await getJourney()` first, *then*
   `Promise.all([documents, eligibility, auditLog])`.
 
-## Open items for Phase 6+
+## Phase 6 — Productization: real product shell + judge experience
+
+Backend additions were kept deliberately minimal — this phase is framed
+as frontend/product work, and the instruction was explicit: don't expand
+backend architecture unless a real product feature needs it. Everything
+below is additive; the orchestrator, repository/storage abstraction and
+event-processing path built in Phases 3-5 are untouched.
+
+- **New generic (non-demo) backend surface**, needed because every
+  product page (`/services`, `/journeys`, `/journeys/[id]`, `/vault`,
+  `/profile`) needs data for *any* citizen and *any* life event, not just
+  the fixed demo citizen the `/demo/*` endpoints are scoped to:
+  - `GET/POST /citizens/{id}/journeys`, `GET /journeys/{id}`,
+    `POST /journeys/{id}/consent/{service}[/revoke]`,
+    `POST /journeys/{id}/submit/{service}`,
+    `POST /journeys/{id}/approve/{service}` (`app/api/v1/journeys.py`) —
+    a generic version of the demo's college-specific actions, resolving
+    connectors by department instead of hardcoding Revenue.
+  - `GET /life-events`, `GET /life-events/{code}` — citizen-facing
+    life-event metadata (title/description/goal statement, EN+MR),
+    backed by a new small static registry
+    (`app/services/life_event_catalog.py`) keyed by the same codes as
+    `GRAPH_REGISTRY`.
+  - `app/services/journey_narrative.py` — `current_blocker`/`next_action`
+    computed server-side from real step/consent state, so "what's
+    blocking me, what do I do next" (Priority 3) is backend truth
+    transformed into plain language, never invented as frontend copy.
+- **Two new mock connectors** (Urban Development, Finance) plus a
+  **generic connector-by-department resolver**
+  (`container.get_connector_for_department`) — needed for the second
+  real life event (Priority 7). The existing `/demo` college flow still
+  uses its own hardcoded `get_revenue_connector()` untouched.
+- **A third new connector (Home/identity) was needed to fix a real bug**:
+  a citizen without the `/demo` seeding's pre-verified identity got "No
+  connector registered for department 'Home'" the instant they tried to
+  submit `identity_verification` through the generic API — a path the
+  college demo's citizen never exercised because their identity always
+  started pre-verified. Found live in the browser, not by code review;
+  `app/services/connectors/home_affairs.py` added, with a regression test.
+- **Consent revoke** (`JourneyService.revoke_consent`, wrapping the
+  orchestrator's existing `revoke_consent` which was built but never
+  exposed) — needed for Priority 5's "Grant / Reject / Revoke" consent UX.
+- **Document rejection now cascades symmetrically with verification**:
+  `JourneyService.sync_rejected_document` mirrors `sync_verified_document`
+  — a rejected vault document pushes any waiting journey step to
+  REJECTED through the same shared event path, so "the requirement
+  remains unsatisfied and the citizen gets an actionable next step"
+  (a Phase 6 testing requirement) is real backend state, not just a
+  vault-level status with no journey-level consequence.
+- **`DocumentView.used_by`**: cross-references a document's `doc_type`
+  against every one of the citizen's applications' step keys, so the
+  vault can show "Income Certificate — used by: Scholarship Application"
+  (Priority 4's reusable-data demonstration) without a second, separate
+  relationship being modeled — it's derived, not stored.
+
+### Frontend: the product shell
+
+- **7 routes** (`/`, `/services`, `/journeys`, `/journeys/[id]`,
+  `/vault`, `/profile`, `/demo`) plus `/admin`, sharing one `NavBar` and
+  one design language — not "dozens of disconnected pages." `/demo`
+  keeps its own distinct judge-mode framing (orange badge) so it reads
+  as a separate mode, not a hidden extra page in the main IA.
+- **No real citizen auth yet** (Supabase Auth isn't wired — see below),
+  so `useCitizenId()` is a browser-local, editable-on-`/profile`
+  stand-in identifier. It is explicitly documented as not a security
+  boundary; the backend doesn't verify who's asking. This is the
+  correct scope for "local adapters only, no Supabase yet."
+- **i18n foundation**: a small React context (`LanguageProvider`) + a
+  centralized string dictionary (`translations.ts`), covering nav, the
+  home hero/architecture explainer, status labels, and common
+  action/consent labels — not an exhaustive translation of every string
+  on every page (e.g. the "How SETU works" step list and admin dashboard
+  stayed English-only). This matches the instruction to translate "the
+  most important citizen-facing screens," not the whole product, given
+  the scope of this phase. Backend identifiers/API fields are never
+  translated — only display strings.
+- **Judge Mode (`/demo`) restructured with a scenario selector**: the
+  original College Admission implementation was extracted verbatim into
+  `CollegeAdmissionPanel.tsx` with zero logic changes (Priority 7 of the
+  acceptance criteria: "College Admission remains fully deterministic")
+  — re-verified live in the browser end to end after every change in
+  this phase. `SmallBusinessPanel.tsx` is new, built entirely on the
+  generic `/journeys` API — proving the orchestrator is reusable, not
+  proving a second bespoke demo implementation.
+- **Home page rebuilt** with the architecture explainer (Priority 10):
+  Citizen → OneGov UI → Profile + Consent → Service Orchestrator →
+  Connector/Adapter Layer → Government Departments, and the central
+  message "SETU does not replace existing government portals. It
+  connects them around the citizen's goal." No separate explainer page
+  — folded into Home to avoid page-count creep.
+- **Admin dashboard (`/admin`)** consumes `GET /admin/metrics` (already
+  real since Phase 5) with zero new backend work — total/active/complete/
+  blocked journey counts, bottleneck service codes ("where are citizens
+  getting stuck"), department pending/rejected counts, blocked-journey
+  detail list. No fabricated numbers; an empty section says so plainly
+  ("No blocked journeys right now") rather than showing a fake zero-state
+  chart.
+
+### Bugs found via live browser use this phase (not by code review)
+
+- **Dark-mode CSS silently broke every page's contrast**: `globals.css`
+  had a `prefers-color-scheme: dark` media query flipping `--background`
+  to near-black, combined with a plain (unlayered) `body { background }`
+  rule that beat every Tailwind utility class regardless of specificity
+  (CSS cascade layers: unlayered always wins over `@layer utilities`,
+  which is where Tailwind's generated classes live). No page in this
+  product implements a `dark:` variant, so on any browser/OS defaulting
+  to dark scheme, every page rendered with dark text on a near-black
+  background — nearly unreadable. Confirmed via
+  `getComputedStyle(document.body)` before fixing. Removed the dark
+  override; the product is light-only until dark mode is deliberately
+  designed for.
+- **`canGrant` excluded `READY`, only allowing `NOT_STARTED`** in both
+  `SmallBusinessPanel.tsx` and `/journeys/[id]/page.tsx` — so the moment
+  a step's dependency was satisfied (e.g. `local_noc` once
+  `business_registration` verified), its "Grant consent" button stayed
+  permanently disabled even though the backend had no such restriction
+  (`grant_consent` never checked step status). A judge clicking through
+  the Small Business scenario would hit two dead buttons. Fixed by
+  including `ready` alongside `not_started` in both places.
+- **The backend's `next_action` text had the identical gap**: it only
+  suggested granting consent/submitting for `NOT_STARTED` steps, so a
+  `READY` step (with no active journey-level short-circuit) would fall
+  through to a stale "submit your final application" message that never
+  mentioned consent. Fixed by merging `NOT_STARTED` and `READY` into one
+  actionable branch in `journey_narrative.next_action`. Note: this
+  particular fix is not exercised by the Small Business graph's own
+  topology (both `local_noc` and `gst_registration` share the single
+  `business_registration` dependency, so they become READY
+  simultaneously, at which point `Journey.is_complete()` — true once
+  every step is VERIFIED-or-READY, established since Phase 2 — already
+  short-circuits `next_action` to "nothing further needed" first). It's
+  still correct and kept for any life event whose steps unlock at
+  different times.
+- **`is_complete()` semantics were re-examined, not changed**: a journey
+  where every step is at least READY counts as complete, exactly as it
+  has since Phase 2 (this is why `education_scholarship` reaching READY
+  was always the college demo's finish line without a further
+  submission). Applying that same rule to Small Business means the
+  citizen can stop once `local_noc`/`gst_registration` are READY, or
+  optionally submit them for final department sign-off — both are valid
+  under the existing definition; the frontend now permits both instead
+  of blocking the optional path.
+
+## Open items for Phase 7+
 
 - Supabase project must be created (cloud, free tier) and the migrations
   applied to it; Appwrite project needed for real document storage. Both
   need account creation, which requires the project owner — not
   something to be done unattended. The repository/storage abstraction
   exists specifically so this can happen later without touching
-  orchestration or business logic.
-- No admin/operations dashboard UI yet — `/admin/metrics` is real but
-  has no frontend consuming it.
-- No i18n on the actual UI (the demo page shows Marathi + English as
-  static text, not a language switcher).
+  orchestration or business logic. Nothing in Phase 6 required it.
+- No real citizen authentication — `useCitizenId()` is a browser-local
+  placeholder, not a security boundary.
+- i18n covers key screens, not every string (see above) — a full
+  translation pass is future work.
 - Connector state (Phase 3 limitation) still doesn't survive a backend
   restart mid-journey.
-- Only one life event (`college_admission_scholarship`) has a working
-  citizen-facing flow; `start_small_business` exists in the backend
-  catalog/graph but has no `/demo`-equivalent frontend experience yet —
-  the home page marks it "Coming soon" honestly rather than linking to
-  something incomplete.
+- Admin dashboard has no "average processing time" metric — the spec
+  said not to fabricate one, and there isn't yet enough real completed-
+  journey history to compute it meaningfully.
+- Small Business's "Reset" in Judge Mode starts a genuinely new journey
+  (fresh UUID) rather than mutating a fixed one in place like College
+  Admission's deterministic reset — the generic `/citizens/{id}/journeys`
+  POST always creates fresh. Multiple demo runs accumulate journeys for
+  the demo business citizen in local storage; harmless (JSON file, not
+  shown to judges directly) but noted as a minor rough edge, not silently
+  hidden.

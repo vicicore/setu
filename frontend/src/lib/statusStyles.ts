@@ -1,12 +1,21 @@
 import type { ApplicationStepStatus, DocumentStatus, SlaStatus } from "@/lib/api";
+import type { TranslationKey } from "@/lib/translations";
 
-export const STATUS_LABEL: Record<ApplicationStepStatus, string> = {
-  not_started: "Not started",
-  blocked: "Blocked",
-  in_progress: "In progress",
-  verified: "Verified",
-  ready: "Ready",
-  rejected: "Rejected",
+export const STATUS_LABEL_KEY: Record<ApplicationStepStatus, TranslationKey> = {
+  not_started: "status_not_started",
+  blocked: "status_blocked",
+  in_progress: "status_in_progress",
+  verified: "status_verified",
+  ready: "status_ready",
+  rejected: "status_rejected",
+};
+
+export const DOC_STATUS_LABEL_KEY: Record<DocumentStatus, TranslationKey> = {
+  uploaded: "doc_status_uploaded",
+  under_review: "doc_status_under_review",
+  verified: "doc_status_verified",
+  rejected: "doc_status_rejected",
+  expired: "doc_status_expired",
 };
 
 export const STATUS_CLASSES: Record<ApplicationStepStatus, string> = {
@@ -22,20 +31,6 @@ export const SLA_CLASSES: Record<SlaStatus, string> = {
   on_track: "text-emerald-700",
   at_risk: "text-amber-700",
   breached: "text-red-700",
-};
-
-export const SLA_LABEL: Record<SlaStatus, string> = {
-  on_track: "SLA on track",
-  at_risk: "SLA at risk",
-  breached: "SLA breached",
-};
-
-export const DOC_STATUS_LABEL: Record<DocumentStatus, string> = {
-  uploaded: "Uploaded",
-  under_review: "Under review",
-  verified: "Verified",
-  rejected: "Rejected",
-  expired: "Expired",
 };
 
 export const DOC_STATUS_CLASSES: Record<DocumentStatus, string> = {

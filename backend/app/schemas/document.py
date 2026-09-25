@@ -5,6 +5,12 @@ from pydantic import BaseModel
 from app.schemas.enums import DocumentStatus
 
 
+class DocumentUsedByJourney(BaseModel):
+    application_id: str
+    life_event_title_en: str
+    service_code: str
+
+
 class DocumentView(BaseModel):
     id: str
     citizen_id: str
@@ -18,6 +24,7 @@ class DocumentView(BaseModel):
     url: str
     created_at: datetime
     updated_at: datetime
+    used_by: list[DocumentUsedByJourney] = []
 
 
 class DocumentRejectRequest(BaseModel):

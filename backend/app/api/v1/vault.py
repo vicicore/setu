@@ -1,13 +1,36 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.core.container import get_document_vault_service, get_journey_service
+from app.core.container import (
+    get_application_repository,
+    get_document_vault_service,
+    get_journey_service,
+)
 from app.repositories.models import DocumentRecord
-from app.schemas.document import DocumentRejectRequest, DocumentView
+from app.schemas.document import DocumentRejectRequest, DocumentUsedByJourney, DocumentView
 from app.services.document_service import DocumentNotFoundError, InvalidDocumentTransitionError
-from app.services.vault_integration import verify_document_and_sync_journeys
+from app.services.life_event_catalog import get_life_event_meta
+from app.services.vault_integration import (
+    reject_document_and_sync_journeys,
+    verify_document_and_sync_journeys,
+)
 from app.storage.local_disk import UnsupportedFileError
 
 router = APIRouter(prefix="/citizens", tags=["vault"])
+
+
+def _used_by(citizen_id: str, doc_type: str) -> list[DocumentUsedByJourney]:
+    used_by = []
+    for record in get_application_repository().list_for_citizen(citizen_id):
+        if doc_type in record.steps:
+            meta = get_life_event_meta(record.life_event_code)
+            used_by.append(
+                DocumentUsedByJourney(
+                    application_id=record.id,
+                    life_event_title_en=meta.title_en,
+                    service_code=doc_type,
+                )
+            )
+    return used_by
 
 
 def _to_view(record: DocumentRecord, url: str) -> DocumentView:
@@ -24,6 +47,7 @@ def _to_view(record: DocumentRecord, url: str) -> DocumentView:
         url=url,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        used_by=_used_by(record.citizen_id, record.doc_type),
     )
 
 
@@ -96,9 +120,15 @@ def verify_document(citizen_id: str, document_id: str) -> DocumentView:
 
 @router.post("/{citizen_id}/documents/{document_id}/reject", response_model=DocumentView)
 def reject_document(citizen_id: str, document_id: str, body: DocumentRejectRequest) -> DocumentView:
-    service = get_document_vault_service()
+    """Mirrors verify_document: rejection cascades into any waiting
+    journey step through the same event path, so the requirement
+    visibly remains unsatisfied rather than silently stuck."""
+    vault = get_document_vault_service()
+    journeys = get_journey_service()
     try:
-        record = service.reject(document_id, body.reason)
+        record, _updated_journeys = reject_document_and_sync_journeys(
+            document_id, body.reason, vault, journeys
+        )
     except (DocumentNotFoundError, InvalidDocumentTransitionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _to_view(record, service.get_url(record))
+    return _to_view(record, vault.get_url(record))
